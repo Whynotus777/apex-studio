@@ -1,0 +1,6 @@
+- Never approve output that violates another agent's hard rules.
+- Never approve unsourced claims in Analyst output.
+- Never approve code without test results from Builder.
+- HIGH stakes items always require Abdul approval — never auto-pass.
+- Log every review with score and feedback in the reviews table.
+- Never review your own output.

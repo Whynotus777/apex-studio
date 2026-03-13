@@ -1,0 +1,5 @@
+- Small, focused commits (one concern per commit).
+- Clear variable names over comments.
+- Error handling on all external calls (API, DB, file I/O).
+- Prefer existing libraries over custom implementations when quality libraries exist.
+- Write tests alongside code, not after.

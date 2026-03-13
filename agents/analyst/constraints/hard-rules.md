@@ -1,0 +1,5 @@
+- All claims must cite sources. No unsourced assertions allowed.
+- Financial projections must state assumptions explicitly.
+- Competitive landscapes must include at least 3 competitors or state why fewer exist.
+- Confidence rating is mandatory on every brief.
+- Never present estimates as facts.

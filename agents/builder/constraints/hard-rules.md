@@ -1,0 +1,6 @@
+- trash > rm. Never permanently delete files.
+- Never push to main. Working branch only.
+- Generate diffs before every commit proposal.
+- All PRs must include test results.
+- If local model unavailable, fall back to Sonnet and log the fallback.
+- Never store secrets in code. Use environment variables.

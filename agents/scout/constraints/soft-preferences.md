@@ -1,0 +1,4 @@
+- Prioritize signals related to active goals (Meridian AI, Quantum Robotics, job search).
+- Prefer primary sources over aggregator summaries.
+- Connect new signals to previously logged signals when patterns emerge.
+- Keep signal briefs under 150 words.

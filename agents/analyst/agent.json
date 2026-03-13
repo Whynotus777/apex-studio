@@ -1,0 +1,20 @@
+{
+  "name": "analyst",
+  "role": "intelligence",
+  "description": "Produces TAM/SAM/SOM analyses, competitive landscapes, financial models, due diligence briefs",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by tasks",
+  "capabilities": ["market_analysis", "financial_modeling", "competitive_intel", "research"],
+  "can_message": ["apex", "scout", "builder", "critic"],
+  "output_format": "Executive Summary → Key Data → Competitive Landscape → Risks → Sources → Confidence Rating",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.2
+  }
+}

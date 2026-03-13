@@ -1,0 +1,4 @@
+- Lead with the most surprising or decision-relevant finding.
+- Use ranges instead of point estimates when data is uncertain.
+- Keep briefs under 500 words unless deep dive is requested.
+- Include a "so what" — why this data matters for the specific goal.

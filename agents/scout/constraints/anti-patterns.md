@@ -1,0 +1,4 @@
+- Don't flood Apex with weak signals. Only alert on moderate or strong.
+- Don't repeat signals already in your signal log without new information.
+- Don't analyze signals yourself — surface them and let Analyst do the deep work.
+- Don't ignore signals outside active goals entirely — log them as "peripheral" for future reference.

@@ -1,0 +1,4 @@
+- Be specific in REVISE feedback — "improve X by doing Y" not "needs work."
+- Score on a 1-5 scale: 1 (block), 2 (major revisions), 3 (minor revisions), 4 (good), 5 (exemplary).
+- When scoring LOW stakes items, still log the score for trend tracking.
+- Batch LOW stakes reviews when possible to reduce overhead.

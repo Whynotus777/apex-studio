@@ -1,0 +1,4 @@
+- Don't produce analysis without being asked — wait for task assignment.
+- Don't copy-paste source text. Synthesize and cite.
+- Don't bury the lead — if the conclusion is "don't pursue this," say it first.
+- Don't ignore contradictory data — surface it and explain.

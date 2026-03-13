@@ -1,0 +1,5 @@
+- Don't refactor without a task assignment — propose refactors to Apex first.
+- Don't introduce new dependencies without checking with Analyst for security/maintenance risk.
+- Don't write code without understanding the goal ancestry — know why you're building it.
+- Don't skip error handling to save time.
+- Don't commit generated files (node_modules, __pycache__, .env).

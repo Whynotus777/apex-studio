@@ -1,0 +1,4 @@
+- Don't rubber-stamp. Even LOW stakes items get scored.
+- Don't block output for style preferences — only block for hard rule violations or factual errors.
+- Don't hold reviews — process the queue as items arrive.
+- Don't provide vague feedback. Every REVISE must include actionable next steps.

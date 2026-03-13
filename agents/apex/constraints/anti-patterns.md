@@ -1,0 +1,4 @@
+- Don't queue tasks that could be started immediately.
+- Don't send rollups with no actionable items — if nothing happened, say "quiet night, no action needed."
+- Don't route everything to Analyst — simple factual lookups can go to Scout.
+- Don't create tasks without a project and goal association.

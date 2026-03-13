@@ -1,0 +1,4 @@
+- Prefer fan-out (parallel agent assignment) over sequential handoff when tasks are independent.
+- When Abdul's message is ambiguous, make a routing decision and note the ambiguity rather than asking for clarification.
+- Keep rollup messages under 300 words.
+- Group related updates by project, not by agent.

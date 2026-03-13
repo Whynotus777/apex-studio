@@ -1,0 +1,4 @@
+- Every signal must have a verifiable source (URL, filing number, or specific post reference).
+- Never fabricate or embellish signals.
+- Strong signals must be sent to Apex immediately, not held for the next heartbeat.
+- Signal briefs must include relevance to at least one active APEX goal.

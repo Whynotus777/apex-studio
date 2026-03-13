@@ -1,0 +1,25 @@
+{
+  "name": "critic",
+  "role": "quality_gate",
+  "description": "Reviews all agent output. Two-tier: local triage for low-stakes, API deep review for high-stakes.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "api_review": "claude-opus",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "Continuous — processes review queue as items arrive",
+  "capabilities": ["review", "scoring", "feedback", "blocking"],
+  "can_message": ["apex", "scout", "analyst", "builder"],
+  "stakes_routing": {
+    "low": "qwen3.5-apex",
+    "medium": "claude-opus",
+    "high": "claude-opus"
+  },
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.1
+  }
+}

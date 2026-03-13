@@ -1,0 +1,19 @@
+{
+  "name": "apex",
+  "role": "orchestrator",
+  "description": "Routes messages, resolves conflicts, maintains shared memory, sends morning rollups",
+  "model": {
+    "primary": "claude-opus",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": "0 8 * * *",
+  "heartbeat_description": "Morning rollup at 8:00 AM EST",
+  "capabilities": ["route", "prioritize", "escalate", "memory_write", "rollup"],
+  "can_message": ["scout", "analyst", "builder", "critic"],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.3
+  }
+}
