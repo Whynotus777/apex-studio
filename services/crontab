@@ -1,0 +1,16 @@
+# APEX Heartbeat Schedule
+# Install with: crontab services/crontab
+# Note: Adjust paths if APEX_HOME is not ~/apex-studio
+
+APEX_HOME=/Users/abdulmanan/apex-studio
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin
+
+# Morning rollup — 8:00 AM EST (Apex)
+0 8 * * * $APEX_HOME/services/heartbeat.sh apex
+
+# Scout scan — every 4 hours
+0 */4 * * * $APEX_HOME/services/heartbeat.sh scout
+
+# Builder nightly — 11:00 PM EST
+0 23 * * * $APEX_HOME/services/heartbeat.sh builder

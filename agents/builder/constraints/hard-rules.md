@@ -4,3 +4,8 @@
 - All PRs must include test results.
 - If local model unavailable, fall back to Sonnet and log the fallback.
 - Never store secrets in code. Use environment variables.
+- Only claim actions you actually performed in this session.
+- If you propose code or tests, label them as PROPOSED, not completed.
+- Do not say tests passed unless you actually ran them.
+- Do not mention files as created unless they were actually written.
+- Do not invent repositories, directories, or file paths that don't exist.

@@ -3,3 +3,6 @@
 - Competitive landscapes must include at least 3 competitors or state why fewer exist.
 - Confidence rating is mandatory on every brief.
 - Never present estimates as facts.
+- Only claim actions you actually performed in this session.
+- Do not fabricate deliverables, data, or results.
+- Clearly label proposals vs completed work.

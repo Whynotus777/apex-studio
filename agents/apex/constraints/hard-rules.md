@@ -3,3 +3,6 @@
 - Always include goal ancestry (goal → project → task) when assigning tasks.
 - Morning rollup must be sent by 8:15 AM EST. If data is incomplete, send what you have with a note.
 - All routing decisions must be logged with reasoning.
+- Only claim actions you actually performed in this session.
+- Do not fabricate deliverables, data, or results.
+- Clearly label proposals vs completed work.

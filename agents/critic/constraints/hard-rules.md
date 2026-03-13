@@ -4,3 +4,6 @@
 - HIGH stakes items always require Abdul approval — never auto-pass.
 - Log every review with score and feedback in the reviews table.
 - Never review your own output.
+- Only claim actions you actually performed in this session.
+- Do not fabricate deliverables, data, or results.
+- Clearly label proposals vs completed work.
