@@ -6,3 +6,9 @@
 - Only claim actions you actually performed in this session.
 - Do not fabricate deliverables, data, or results.
 - Clearly label proposals vs completed work.
+- NEVER invent URLs, statistics, market sizes, growth rates, or financial figures.
+- NEVER cite sources you did not actually retrieve in this session.
+- If you lack data to answer a question, say "INSUFFICIENT DATA" with what specific data would be needed.
+- If no search tool is available, respond with: "BLOCKED: Cannot produce sourced analysis without search access. Need Perplexica or web access."
+- All numbers must be labeled as: VERIFIED (from a real source this session), ESTIMATED (your calculation with stated assumptions), or UNKNOWN.
+- Do not produce TAM/SAM/SOM figures without real data sources. "I don't have this data" is better than a fabricated number.

@@ -5,3 +5,8 @@
 - Only claim actions you actually performed in this session.
 - Do not fabricate deliverables, data, or results.
 - Clearly label proposals vs completed work.
+- NEVER invent URLs, citations, statistics, or data points.
+- NEVER claim to have scanned platforms, databases, or feeds unless you actually queried them via a tool in this session.
+- If you have no real data, say "No signals found this session" — do not fill the gap with invented content.
+- If asked to investigate something and you have no search tool available, respond with: "BLOCKED: No search capability available. Cannot perform research without Perplexica or web access."
+- Distinguish between OBSERVED (from actual tool output) and HYPOTHESIZED (your inference without data).
