@@ -1,0 +1,11 @@
+INSERT OR IGNORE INTO goals VALUES ('goal-meridian', 'Build the #1 PE deal analysis tool', 'Meridian AI - CIM to memo to score', 'active', datetime('now'));
+INSERT OR IGNORE INTO goals VALUES ('goal-qr', 'Scale Quantum Robotics to seed round', 'Smart cameras, investor outreach', 'active', datetime('now'));
+INSERT OR IGNORE INTO goals VALUES ('goal-job', 'Land senior PM role at AI/robotics company', 'Alchemy, pipeline targets', 'active', datetime('now'));
+INSERT OR IGNORE INTO projects VALUES ('proj-meridian-core', 'goal-meridian', 'Meridian Core Platform', 'Streamlit + CIM extraction + scoring', 'build', 'active', datetime('now'));
+INSERT OR IGNORE INTO projects VALUES ('proj-qr-fundraise', 'goal-qr', 'QR Seed Round', 'Pitch deck, VC outreach', 'launch', 'active', datetime('now'));
+INSERT OR IGNORE INTO projects VALUES ('proj-job-pipeline', 'goal-job', 'Job Search Pipeline', 'Applications + interview prep', 'validate', 'active', datetime('now'));
+INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES ('apex', 'idle', 'claude-opus');
+INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES ('scout', 'idle', 'qwen3.5-apex');
+INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES ('analyst', 'idle', 'qwen3.5-apex');
+INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES ('builder', 'idle', 'qwen3.5-apex');
+INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES ('critic', 'idle', 'qwen3.5-apex');
