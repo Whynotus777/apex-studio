@@ -47,18 +47,15 @@ db_query "UPDATE agent_status SET status='active', last_heartbeat=datetime('now'
   session_id='$SESSION_ID' WHERE agent_name='$AGENT_NAME';"
 
 ###############################################################################
-# 2. BUILD SLIM PROMPTS (optimized for 4B models)
+# 2. BUILD SLIM PROMPTS
 ###############################################################################
 
-# Read hard rules only (skip soft prefs and anti-patterns for 4B)
 HARD_RULES=""
 [ -f "$AGENT_DIR/constraints/hard-rules.md" ] && HARD_RULES=$(cat "$AGENT_DIR/constraints/hard-rules.md")
 
-# Get agent role from agent.json
 ROLE=$(get_json_field "role")
 DESC=$(get_json_field "description")
 
-# System prompt: ~200 tokens max
 cat > "$TMP_DIR/system_prompt.txt" << SYSEOF
 You are $AGENT_NAME, the $ROLE agent in APEX venture studio.
 Job: $DESC
@@ -66,18 +63,23 @@ Job: $DESC
 Hard rules:
 $HARD_RULES
 
-Respond concisely. No preamble. Structure your response as:
-ACTIONS TAKEN: (only actions you actually performed — never claim work you did not do)
-OBSERVATIONS: (what you noticed about your context, inbox, task)
-PROPOSED OUTPUT: (your deliverable, clearly labeled as PROPOSED if not yet executed)
-MESSAGES: (TO:<agent> | TYPE:<type> | CONTENT:<msg>) or "none" — valid agents: apex, scout, analyst, builder, critic
-SCRATCHPAD UPDATE: (key facts to remember)
-STATUS: done | blocked:<reason> | needs_review:<low|medium|high>
+Respond with ONLY a valid JSON object. No text before or after the JSON. Use this exact schema:
+{
+  "actions_taken": "what you actually did (not what you would do)",
+  "observations": "what you noticed about your context and task",
+  "proposed_output": "your deliverable, clearly labeled as proposed if not executed",
+  "messages": [
+    {"to": "agent_name", "type": "request|alert|escalation", "content": "message"}
+  ],
+  "scratchpad_update": "key facts to remember",
+  "status": "done|blocked:reason|needs_review:low|needs_review:medium|needs_review:high"
+}
+
+Valid message targets: apex, scout, analyst, builder, critic. No other targets allowed.
+If no messages needed, use an empty array: "messages": []
 SYSEOF
 
-# User prompt: task + inbox only
 {
-  # Inbox
   INBOX=$(db_query "SELECT from_agent, content FROM agent_messages
     WHERE to_agent='$AGENT_NAME' AND status='pending'
     ORDER BY priority ASC LIMIT 5;")
@@ -90,7 +92,6 @@ SYSEOF
   db_query "UPDATE agent_messages SET status='read'
     WHERE to_agent='$AGENT_NAME' AND status='pending';"
 
-  # Task context (slim: just title, description, goal)
   if [ -n "$TASK_ID" ]; then
     TASK_INFO=$(db_query "SELECT t.title, t.description, g.name
       FROM tasks t
@@ -132,11 +133,9 @@ RESPONSE=$(python3 "$APEX_HOME/services/call_model.py" \
   "$TMP_DIR/user_prompt.txt" \
   "${TEMPERATURE:-0.3}" 2>/dev/null) || true
 
-# Fallback chain
 if [ -z "$RESPONSE" ]; then
   FALLBACK=$(get_json_field "model.fallback")
   log "Primary failed, trying fallback: $FALLBACK"
-
   if echo "$FALLBACK" | grep -q "claude"; then
     if [ -n "$ANTHROPIC_API_KEY" ]; then
       RESPONSE=$(python3 "$APEX_HOME/services/call_model.py" "$FALLBACK" \
@@ -155,15 +154,30 @@ if [ -z "$RESPONSE" ]; then
 fi
 
 if [ -z "$RESPONSE" ]; then
-  RESPONSE="ERROR: All model calls failed. Check Ollama is running (ollama ps)."
+  RESPONSE='{"actions_taken":"none","observations":"All model calls failed","proposed_output":"none","messages":[],"scratchpad_update":"Model call failure","status":"blocked:model_failure"}'
 fi
 
 ###############################################################################
-# 4. PROCESS RESPONSE
+# 4. PARSE RESPONSE (structured JSON parser)
 ###############################################################################
 
 RESP_LENGTH=${#RESPONSE}
 log "Response received ($RESP_LENGTH chars)"
+
+# Save raw response
+echo "$RESPONSE" > "$TMP_DIR/raw_response.txt"
+
+# Parse through the structured parser
+PARSED=$(python3 "$APEX_HOME/services/parse_response.py" "$TMP_DIR/raw_response.txt" 2>/dev/null) || PARSED=""
+
+if [ -z "$PARSED" ]; then
+  log "WARN: Parser failed, storing raw response"
+  PARSED="{\"actions_taken\":\"parse_error\",\"observations\":\"Parser could not process response\",\"proposed_output\":\"\",\"messages\":[],\"scratchpad_update\":\"\",\"status\":{\"state\":\"unknown\",\"reason\":\"parse_error\"},\"_parse_method\":\"error\"}"
+fi
+
+# Extract fields using Python (safe, no grep/sed)
+PARSE_METHOD=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('_parse_method','unknown'))" 2>/dev/null)
+log "Parse method: $PARSE_METHOD"
 
 # Save session
 ESCAPED=$(echo "$RESPONSE" | head -200 | sed "s/'/''/g")
@@ -171,58 +185,69 @@ db_query "INSERT OR REPLACE INTO agent_sessions (id, agent_name, task_id, contex
   VALUES ('$SESSION_ID','$AGENT_NAME','$TASK_ID','$ESCAPED',datetime('now'),'active');"
 
 # Append to scratchpad
-SCRATCHPAD_ENTRY=$(echo "$RESPONSE" | sed -n '/SCRATCHPAD UPDATE/,/^STATUS:/p' | head -10)
-if [ -n "$SCRATCHPAD_ENTRY" ]; then
+SCRATCHPAD=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('scratchpad_update',''))" 2>/dev/null)
+if [ -n "$SCRATCHPAD" ] && [ "$SCRATCHPAD" != "None" ] && [ "$SCRATCHPAD" != "" ]; then
   {
     echo ""
     echo "--- $SESSION_ID | $(date '+%Y-%m-%d %H:%M:%S') | Task: ${TASK_ID:-heartbeat} ---"
-    echo "$SCRATCHPAD_ENTRY"
+    echo "$SCRATCHPAD"
   } >> "$AGENT_DIR/workspace/scratchpad.md"
 fi
 
-# Inter-agent messages (allowlisted targets only)
-VALID_AGENTS="apex scout analyst builder critic"
-echo "$RESPONSE" | grep "^TO:" | while IFS= read -r msg_line; do
-  TO_AGENT=$(echo "$msg_line" | sed -n 's/.*TO:\([^ |]*\).*/\1/p')
-  MSG_CONTENT=$(echo "$msg_line" | sed -n 's/.*CONTENT:\(.*\)/\1/p')
-  if [ -n "$TO_AGENT" ] && [ -n "$MSG_CONTENT" ]; then
-    # Validate target agent
-    if echo "$VALID_AGENTS" | grep -qw "$TO_AGENT"; then
-      SAFE=$(echo "$MSG_CONTENT" | sed "s/'/''/g")
-      db_query "INSERT INTO agent_messages (from_agent,to_agent,msg_type,content,task_id)
-        VALUES ('$AGENT_NAME','$TO_AGENT','request','$SAFE','$TASK_ID');"
-      log "Message sent: $AGENT_NAME → $TO_AGENT"
-    else
-      log "BLOCKED message to invalid agent: $TO_AGENT (rerouting to apex)"
-      SAFE=$(echo "[$TO_AGENT] $MSG_CONTENT" | sed "s/'/''/g")
-      db_query "INSERT INTO agent_messages (from_agent,to_agent,msg_type,content,task_id)
-        VALUES ('$AGENT_NAME','apex','escalation','$SAFE','$TASK_ID');"
-    fi
-  fi
-done
+# Process messages via parser (handles allowlist internally)
+echo "$PARSED" | python3 -c "
+import json, sys, sqlite3, os
 
-# Task status
+parsed = json.load(sys.stdin)
+messages = parsed.get('messages', [])
+agent = '$AGENT_NAME'
+task_id = '$TASK_ID'
+db_path = os.path.join('$APEX_HOME', 'db', 'apex_state.db')
+
+if not messages:
+    sys.exit(0)
+
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+for msg in messages:
+    to_agent = msg.get('to', '')
+    msg_type = msg.get('type', 'request')
+    content = msg.get('content', '')
+    if to_agent and content:
+        cur.execute(
+            'INSERT INTO agent_messages (from_agent, to_agent, msg_type, content, task_id) VALUES (?,?,?,?,?)',
+            (agent, to_agent, msg_type, content, task_id)
+        )
+        print(f'  Message: {agent} → {to_agent} ({msg_type})')
+conn.commit()
+conn.close()
+" 2>/dev/null && true
+
+# Handle task status
 if [ -n "$TASK_ID" ]; then
-  STATUS_LINE=$(echo "$RESPONSE" | grep -i "^STATUS:" | tail -1 || echo "")
-  case "$STATUS_LINE" in
-    *needs_review*)
-      STAKES=$(echo "$STATUS_LINE" | sed -n 's/.*needs_review:\([a-z]*\).*/\1/p')
+  STATUS_STATE=$(echo "$PARSED" | python3 -c "import json,sys; s=json.load(sys.stdin).get('status',{}); print(s.get('state','') if isinstance(s,dict) else s)" 2>/dev/null)
+
+  case "$STATUS_STATE" in
+    needs_review)
+      STAKES=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',{}).get('stakes','low'))" 2>/dev/null)
       db_query "INSERT INTO reviews (task_id,agent_name,output_ref,stakes)
         VALUES ('$TASK_ID','$AGENT_NAME','$SESSION_ID','${STAKES:-low}');"
       db_query "UPDATE tasks SET review_status='pending', status='review' WHERE id='$TASK_ID';"
       log "Review queued: $TASK_ID ($STAKES)"
       ;;
-    *done*)
+    done)
       db_query "UPDATE tasks SET status='done', completed_at=datetime('now'),
         checked_out_by=NULL WHERE id='$TASK_ID';"
       log "Task completed: $TASK_ID"
       ;;
-    *blocked*)
+    blocked)
       db_query "UPDATE tasks SET status='blocked' WHERE id='$TASK_ID';"
-      log "Task blocked: $TASK_ID"
+      REASON=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',{}).get('reason',''))" 2>/dev/null)
+      log "Task blocked: $TASK_ID — $REASON"
       ;;
     *)
       db_query "UPDATE tasks SET checked_out_by=NULL WHERE id='$TASK_ID';"
+      log "Status unclear: $STATUS_STATE — releasing checkout"
       ;;
   esac
 fi
@@ -239,8 +264,30 @@ echo "============================================"
 echo "  APEX Agent: $AGENT_NAME"
 echo "  Session: $SESSION_ID"
 echo "  Task: ${TASK_ID:-heartbeat}"
+echo "  Parse: $PARSE_METHOD"
 echo "============================================"
 echo ""
-echo "$RESPONSE"
+
+# Pretty-print the parsed response
+echo "$PARSED" | python3 -c "
+import json, sys
+p = json.load(sys.stdin)
+print(f\"ACTIONS: {p.get('actions_taken', 'none')}\")
+print(f\"OBSERVATIONS: {p.get('observations', 'none')}\")
+print(f\"PROPOSED OUTPUT: {p.get('proposed_output', 'none')}\")
+msgs = p.get('messages', [])
+if msgs:
+    print(f'MESSAGES ({len(msgs)}):')
+    for m in msgs:
+        print(f'  → {m[\"to\"]}: [{m[\"type\"]}] {m[\"content\"]}')
+else:
+    print('MESSAGES: none')
+print(f\"SCRATCHPAD: {p.get('scratchpad_update', 'none')}\")
+s = p.get('status', {})
+if isinstance(s, dict):
+    print(f\"STATUS: {s.get('state', 'unknown')} {s.get('reason', '') or s.get('stakes', '')}\")
+else:
+    print(f'STATUS: {s}')
+" 2>/dev/null
 
 log "Session complete."
