@@ -14,6 +14,7 @@ Setup:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -979,12 +980,20 @@ async def task_command(update: Update, context: Any) -> None:
     current_agent = agent_id
     chain_log: list[dict[str, Any]] = []
     writer_preview = ""
+    loop = asyncio.get_event_loop()
     for hop in range(1, _MAX_CHAIN_HOPS + 1):
+        print(f"[DEBUG] spawn start: agent={current_agent} task={task_id} hop={hop}", flush=True)
+        env_check = kernel._subprocess_env()
+        print(f"[DEBUG] env: GOOGLE_API_KEY={'SET' if env_check.get('GOOGLE_API_KEY') else 'MISSING'} APEX_HOME={env_check.get('APEX_HOME')} PYTHONPATH={env_check.get('PYTHONPATH','')[:60]}", flush=True)
         try:
-            response = kernel.spawn_agent(current_agent, task_id)
+            response = await loop.run_in_executor(
+                None, kernel.spawn_agent, current_agent, task_id
+            )
         except Exception as exc:
+            print(f"[DEBUG] spawn exception: {exc}", flush=True)
             await update.message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
             break
+        print(f"[DEBUG] spawn done: agent={current_agent} status={response.get('status')}", flush=True)
 
         role = current_agent.split("-")[-1].lower()
         action_summary = (
@@ -1148,7 +1157,7 @@ async def rollup_command(update: Update, context: Any) -> None:
     if not is_authorized(update.effective_chat.id):
         return
     await update.message.reply_text("☀️ Triggering morning rollup...")
-    response = kernel.spawn_agent("apex")
+    response = await asyncio.get_event_loop().run_in_executor(None, kernel.spawn_agent, "apex")
     await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 
@@ -1169,7 +1178,9 @@ async def spawn_command(update: Update, context: Any) -> None:
         return
 
     await update.message.reply_text(f"🚀 Spawning {agent_name}...")
-    response = kernel.spawn_agent(agent_name, task_id)
+    response = await asyncio.get_event_loop().run_in_executor(
+        None, kernel.spawn_agent, agent_name, task_id
+    )
     await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 
@@ -1183,7 +1194,7 @@ async def handle_message(update: Update, context: Any) -> None:
         return
 
     await update.message.reply_text("📨 Routing to Apex...")
-    response = kernel.route_user_message(text)
+    response = await asyncio.get_event_loop().run_in_executor(None, kernel.route_user_message, text)
     await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 

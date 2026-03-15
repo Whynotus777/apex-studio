@@ -350,6 +350,7 @@ class ApexKernel:
             text=True,
             env=self._subprocess_env(),
             timeout=600,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0 and not result.stdout:
             raise RuntimeError(result.stderr.strip() or f"spawn-agent.sh failed for '{agent_id}'.")
@@ -1398,6 +1399,22 @@ class ApexKernel:
     def _subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()
         env["APEX_HOME"] = str(self.apex_home)
+        # Ensure PYTHONPATH includes apex_home so kernel.* imports work in subprocesses
+        existing_pp = env.get("PYTHONPATH", "")
+        apex_str = str(self.apex_home)
+        if apex_str not in existing_pp:
+            env["PYTHONPATH"] = apex_str + (":" + existing_pp if existing_pp else "")
+        # Load any missing API keys from .env so subprocesses always have them
+        _env_file = self.apex_home / ".env"
+        if _env_file.exists():
+            for _line in _env_file.read_text().splitlines():
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k = _k.strip()
+                if _k and _k not in env:
+                    env[_k] = _v.strip()
         return env
 
     def _parse_spawn_output(self, output: str) -> dict[str, Any]:
