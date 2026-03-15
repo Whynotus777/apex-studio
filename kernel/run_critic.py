@@ -44,11 +44,12 @@ def db_execute(sql, params=None):
 def get_pending_reviews():
     return db_query("""
         SELECT r.id, r.task_id, r.agent_name, r.output_ref, r.stakes,
-               s.context as agent_output,
+               (SELECT s.context FROM agent_sessions s
+                WHERE s.agent_name = r.agent_name AND s.task_id = r.task_id
+                ORDER BY s.last_active DESC LIMIT 1) AS agent_output,
                t.title as task_title, t.description as task_desc,
                g.name as goal_name
         FROM reviews r
-        LEFT JOIN agent_sessions s ON r.output_ref = s.id
         LEFT JOIN tasks t ON r.task_id = t.id
         LEFT JOIN goals g ON t.goal_id = g.id
         WHERE r.verdict IS NULL
@@ -206,6 +207,19 @@ def process_review(review, dry_run=False):
 
     print(f"\n  Processing review #{review_id}")
     print(f"  Agent: {agent_name} | Task: {task_id} | Stakes: {stakes}")
+
+    # Guard: skip reviews with empty session context rather than sending garbage to LLM
+    agent_output = (review.get("agent_output") or "").strip()
+    if not agent_output:
+        print(f"  SKIPPED: no session context found for {agent_name} / {task_id}")
+        db_execute("""
+            UPDATE reviews SET
+                verdict = 'SKIPPED',
+                feedback = 'SKIPPED: empty session context — no agent output found for this task',
+                reviewed_at = datetime('now')
+            WHERE id = ?
+        """, [review_id])
+        return
 
     system_prompt, user_prompt = build_critic_prompt(review)
 

@@ -152,6 +152,30 @@ def _critic_score(task_id: str) -> str:
     return f"{sum(scores) / len(scores):.1f}/5"
 
 
+def _dedupe_sources(task_id: str) -> list[dict[str, str]]:
+    rows = _fetch_task_evidence(task_id)
+    seen: set[str] = set()
+    sources: list[dict[str, str]] = []
+    for row in rows:
+        results = row.get("results") or []
+        if isinstance(results, str):
+            try:
+                results = json.loads(results)
+            except Exception:
+                results = []
+        for result in results:
+            url = str(result.get("url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            sources.append({
+                "title": str(result.get("title") or url).strip(),
+                "url": url,
+                "snippet": str(result.get("snippet") or "").strip(),
+            })
+    return sources
+
+
 def _normalize_review_feedback(feedback: Any) -> dict[str, Any]:
     if isinstance(feedback, dict):
         return feedback
@@ -212,7 +236,12 @@ def _smart_revision_route(
     return original_agent, label, "needs revision"
 
 
-async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) -> None:
+async def _handle_critic_chain(
+    task_id: str,
+    workspace_id: str,
+    message: Any,
+    emit_message: bool = True,
+) -> dict[str, Any] | None:
     """Submit task for Critic review, run pipeline, post result for THIS task."""
     try:
         kernel.submit_for_review(task_id, "low")
@@ -222,13 +251,15 @@ async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) ->
     try:
         results = kernel.run_critic_pipeline()
     except Exception as exc:
-        await _safe_reply(message, f"⚠️ Critic pipeline failed: {exc}")
-        return
+        if emit_message:
+            await _safe_reply(message, f"⚠️ Critic pipeline failed: {exc}")
+        return None
 
     review = next((r for r in results if r.get("task_id") == task_id), None)
     if review is None:
-        await _safe_reply(message, "⚠️ Critic found no review for this task.")
-        return
+        if emit_message:
+            await _safe_reply(message, "⚠️ Critic found no review for this task.")
+        return None
 
     verdict = (review.get("verdict") or "").upper()
     feedback_data = _normalize_review_feedback(review.get("feedback"))
@@ -250,7 +281,8 @@ async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) ->
     else:
         text = f"🔍 Critic verdict: {verdict or 'pending'}{score_part}"
 
-    await _safe_reply(message, text)
+    if emit_message:
+        await _safe_reply(message, text)
 
     if verdict in ("REVISE", "BLOCK"):
         route_agent, route_label, route_reason = _smart_revision_route(review, workspace_id)
@@ -268,10 +300,20 @@ async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) ->
             )
         except Exception:
             pass
-        await _safe_reply(
-            message,
-            f"🔄 Revision routed to {route_label} — {route_reason}",
-        )
+        if emit_message:
+            await _safe_reply(
+                message,
+                f"🔄 Revision routed to {route_label} — {route_reason}",
+            )
+        review["revision_route"] = {
+            "agent_id": route_agent,
+            "label": route_label,
+            "reason": route_reason,
+        }
+
+    review["score_str"] = score_str
+    review["display_text"] = text
+    return review
 
 
 def _next_chain_agent(workspace_id: str, messages: list[dict[str, Any]]) -> str | None:
@@ -322,32 +364,92 @@ def _fetch_task_evidence(task_id: str) -> list[dict[str, Any]]:
 
 def _sources_section(task_id: str) -> str:
     """Build a compact sources block (max 5 unique URLs)."""
-    rows = _fetch_task_evidence(task_id)
-    seen: set[str] = set()
     entries: list[str] = []
-    for row in rows:
-        try:
-            results = (
-                json.loads(row["results"])
-                if isinstance(row["results"], str)
-                else row["results"]
-            )
-        except Exception:
-            results = []
-        for r in results:
-            if len(entries) >= 5:
-                break
-            url = r.get("url", "")
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            title = (r.get("title") or url)[:55]
-            entries.append(f"• {title}\n  {url}")
-        if len(entries) >= 5:
-            break
+    for source in _dedupe_sources(task_id)[:5]:
+        entries.append(f"• {source['title'][:55]}\n  {source['url']}")
     if not entries:
         return "📎 Sources: (no sources retrieved)"
     return "📎 Sources:\n" + "\n".join(entries)
+
+
+def _infer_scout_action(result: dict[str, Any], task_id: str) -> str:
+    text = " ".join(
+        str(result.get(key) or "").strip()
+        for key in ("actions_taken", "observations", "proposed_output")
+    )
+    text_lower = text.lower()
+    topic_count: int | None = None
+    import re
+    match = re.search(r"(\d+)\s+(?:trending\s+)?(?:topics|ideas|signals|angles)", text_lower)
+    if match:
+        topic_count = int(match.group(1))
+    elif result.get("proposed_output"):
+        bullets = [
+            line for line in str(result.get("proposed_output")).splitlines()
+            if line.strip().startswith(("-", "*", "•")) or re.match(r"^\d+\.", line.strip())
+        ]
+        if bullets:
+            topic_count = len(bullets)
+
+    source_count = len(_dedupe_sources(task_id))
+    if topic_count is not None and source_count:
+        return f"Found {topic_count} trending topics ({source_count} sources)"
+    if topic_count is not None:
+        return f"Found {topic_count} trending topics"
+    if source_count:
+        return f"Found source-backed trends ({source_count} sources)"
+    return "Scanned for timely content opportunities"
+
+
+def _infer_writer_action(result: dict[str, Any]) -> str:
+    text = " ".join(
+        str(result.get(key) or "").strip()
+        for key in ("actions_taken", "observations", "proposed_output")
+    ).lower()
+    if "linkedin" in text and "carousel" in text:
+        return "Drafted LinkedIn carousel post"
+    if "linkedin" in text and "post" in text:
+        return "Drafted LinkedIn post"
+    if "article" in text:
+        return "Drafted article"
+    if "caption" in text:
+        return "Drafted caption set"
+    if "thread" in text:
+        return "Drafted thread"
+    return "Drafted content"
+
+
+def _infer_critic_action(review: dict[str, Any], task_id: str) -> str:
+    verdict = str(review.get("verdict") or "").upper()
+    score_str = review.get("score_str") or _critic_score(task_id)
+    if verdict == "PASS":
+        return f"Approved ({score_str})" if score_str else "Approved"
+    if verdict == "REVISE":
+        return f"Requested revision ({score_str})" if score_str else "Requested revision"
+    if verdict == "BLOCK":
+        return f"Blocked ({score_str})" if score_str else "Blocked"
+    return verdict.title() if verdict else "Reviewed"
+
+
+def _content_engine_operator_card(
+    task_id: str,
+    chain_log: list[dict[str, Any]],
+    writer_preview: str,
+) -> str:
+    preview = _summarise(writer_preview.strip(), 280) if writer_preview.strip() else "No draft preview available."
+    sources = _dedupe_sources(task_id)
+    source_lines = [f"• {source['title']}" for source in sources[:3]]
+    sources_block = "\n".join(source_lines) if source_lines else "• No verified sources"
+    lines = [
+        _chain_summary(chain_log),
+        "",
+        "📝 Draft Preview:",
+        preview,
+        "",
+        f"📎 Sources: {len(sources)} verified",
+        sources_block,
+    ]
+    return "\n".join(lines)
 
 
 def _summarise(text: str, limit: int) -> str:
@@ -367,6 +469,7 @@ def _format_task_card(
     result: dict[str, Any],
     task_id: str,
     workspace_id: str,
+    template_id: str | None = None,
 ) -> str:
     """
     Mobile-friendly agent response card.
@@ -386,14 +489,19 @@ def _format_task_card(
 
     sources = _sources_section(task_id)
 
-    lines = [
-        f"🤖 *{agent_id}*",
-        f"Status: {status_text}",
-        "",
-        summary,
-        "",
-        sources,
-    ]
+    role = agent_id.split("-")[-1].lower()
+    if template_id == "content-engine":
+        clean_summary = summary or "Completed step"
+        lines = [f"{_agent_role_icon(role)} *{role.capitalize()}* → {clean_summary}"]
+    else:
+        lines = [
+            f"🤖 *{agent_id}*",
+            f"Status: {status_text}",
+            "",
+            summary,
+            "",
+            sources,
+        ]
     text = "\n".join(lines)
     if len(text) > 500:
         text = text[:450].rstrip() + f"…\n_Full response: /workspace {workspace_id}_"
@@ -817,6 +925,8 @@ async def task_command(update: Update, context: Any) -> None:
     if ws.get("status") == "deleted":
         await update.message.reply_text(f"Workspace `{workspace_id}` has been deleted.", parse_mode="Markdown")
         return
+    template_id = ws.get("template_id")
+    is_content_engine = template_id == "content-engine"
 
     # Find a goal to attach the task to
     goal_id = _get_or_ensure_inbox_goal()
@@ -868,6 +978,7 @@ async def task_command(update: Update, context: Any) -> None:
 
     current_agent = agent_id
     chain_log: list[dict[str, Any]] = []
+    writer_preview = ""
     for hop in range(1, _MAX_CHAIN_HOPS + 1):
         try:
             response = kernel.spawn_agent(current_agent, task_id)
@@ -875,12 +986,19 @@ async def task_command(update: Update, context: Any) -> None:
             await update.message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
             break
 
+        role = current_agent.split("-")[-1].lower()
         action_summary = (
             (response.get("actions_taken") or "").strip()
             or (response.get("observations") or "").strip()
             or (response.get("proposed_output") or "").strip()
         )
-        if not action_summary:
+        if is_content_engine:
+            if role == "scout":
+                action_summary = _infer_scout_action(response, task_id)
+            elif role == "writer":
+                action_summary = _infer_writer_action(response)
+                writer_preview = str(response.get("proposed_output") or writer_preview)
+        elif not action_summary:
             status_obj = response.get("status", {})
             if isinstance(status_obj, dict):
                 action_summary = f"{status_obj.get('state', 'completed')} {status_obj.get('reason') or status_obj.get('stakes') or ''}".strip()
@@ -892,11 +1010,12 @@ async def task_command(update: Update, context: Any) -> None:
             "action": _summarise(action_summary, 60),
         })
 
-        await _safe_reply(
-            update.message,
-            _format_task_card(current_agent, response, task_id, workspace_id),
-            parse_mode="Markdown",
-        )
+        if not is_content_engine:
+            await _safe_reply(
+                update.message,
+                _format_task_card(current_agent, response, task_id, workspace_id, template_id=template_id),
+                parse_mode="Markdown",
+            )
 
         # Auto-chain: follow messages to next agent (capped at MAX_CHAIN_HOPS)
         if hop < _MAX_CHAIN_HOPS:
@@ -905,18 +1024,44 @@ async def task_command(update: Update, context: Any) -> None:
                 next_role = next_agent.rsplit("-", 1)[-1]
                 if next_role == "critic":
                     # Critic runs via review pipeline, not a direct spawn
-                    await _safe_reply(update.message, "🔍 Running Critic review…")
-                    await _handle_critic_chain(task_id, workspace_id, update.message)
+                    if not is_content_engine:
+                        await _safe_reply(update.message, "🔍 Running Critic review…")
+                    review = await _handle_critic_chain(
+                        task_id,
+                        workspace_id,
+                        update.message,
+                        emit_message=not is_content_engine,
+                    )
+                    if review is not None:
+                        chain_log.append({
+                            "agent": f"{workspace_id}-critic",
+                            "status": review.get("verdict"),
+                            "action": _infer_critic_action(review, task_id),
+                        })
+                        if is_content_engine:
+                            review_id = review.get("id")
+                            reply_markup = None
+                            if review_id is not None:
+                                reply_markup = InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
+                                    InlineKeyboardButton("✏️ Edit", callback_data=f"edit_review:{review_id}"),
+                                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
+                                ]])
+                            await update.message.reply_text(
+                                _content_engine_operator_card(task_id, chain_log, writer_preview),
+                                reply_markup=reply_markup,
+                            )
                     break
-                await _safe_reply(
-                    update.message,
-                    f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown"
-                )
+                if not is_content_engine:
+                    await _safe_reply(
+                        update.message,
+                        f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown"
+                    )
                 current_agent = next_agent
                 continue
         break
 
-    if chain_log:
+    if chain_log and not is_content_engine:
         await _safe_reply(
             update.message,
             "🔗 Chain Summary\n" + _chain_summary(chain_log),
@@ -1068,6 +1213,14 @@ async def handle_callback(update: Update, context: Any) -> None:
             await query.edit_message_text(f"❌ Rejected review #{value}")
         except Exception as exc:
             await query.message.reply_text(f"Rejection failed: {exc}")
+        return
+
+    if action == "edit_review":
+        try:
+            kernel.reject_action(int(value), "Edit requested via Telegram")
+            await query.edit_message_text(f"✏️ Sent back for edit on review #{value}")
+        except Exception as exc:
+            await query.message.reply_text(f"Edit request failed: {exc}")
         return
 
     if action == "investigate":
