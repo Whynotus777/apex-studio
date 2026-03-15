@@ -130,3 +130,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_workspaces_template ON workspaces(template_id);
+-- Phase B: Evidence primitive
+CREATE TABLE IF NOT EXISTS evidence (
+    id TEXT PRIMARY KEY,
+    task_id TEXT,
+    agent_id TEXT,
+    tool_name TEXT,
+    query TEXT,
+    results TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
