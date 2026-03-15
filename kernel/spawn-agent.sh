@@ -63,6 +63,8 @@ Job: $DESC
 Hard rules:
 $HARD_RULES
 
+Search Evidence grounding: If Search Evidence is present in the user message, you may ONLY cite URLs and facts that appear in the Search Evidence section. If Search Evidence is absent or empty, do not invent sources and state that no evidence was retrieved.
+
 Respond with ONLY a valid JSON object. No text before or after the JSON. Use this exact schema:
 {
   "actions_taken": "what you actually did (not what you would do)",
@@ -144,6 +146,51 @@ fi
     fi
   else
     echo "No specific task. Run your heartbeat responsibilities."
+  fi
+
+  # Search evidence injection
+  if [ -n "$TASK_ID" ]; then
+    cat > "$TMP_DIR/search_evidence.py" << 'PYEOF'
+import sys, os
+apex_home = os.environ['APEX_HOME']
+db_path = os.environ['APEX_DB']
+agent_name = os.environ['APEX_AGENT']
+task_id = os.environ['APEX_TASK']
+sys.path.insert(0, apex_home)
+try:
+    from kernel.api import ApexKernel
+    k = ApexKernel()
+    tools = k.get_agent_tools(agent_name)
+    has_search = any(t.get('tool_id') == 'web_search' or t.get('name') == 'web_search' for t in tools)
+    if not has_search:
+        print('## Search Evidence\n(none available)')
+        sys.exit(0)
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    row = conn.execute('SELECT title, description FROM tasks WHERE id=?', (task_id,)).fetchone()
+    conn.close()
+    if not row or not row[0]:
+        print('## Search Evidence\n(none available)')
+        sys.exit(0)
+    title, description = row
+    query = (title + ' ' + (description or '')).strip()[:200]
+    from kernel.tool_adapter import execute_tool
+    result = execute_tool('web_search', {'query': query, 'max_results': 5})
+    if result.get('status') != 'ok' or not result.get('results'):
+        print('## Search Evidence\n(none available)')
+        sys.exit(0)
+    from kernel.evidence import EvidenceStore
+    ev = EvidenceStore(db_path)
+    ev.store_evidence(task_id, agent_name, 'web_search', query, result['results'])
+    print(ev.format_for_prompt(task_id))
+except Exception:
+    print('## Search Evidence\n(none available)')
+PYEOF
+    SEARCH_EVIDENCE=$(APEX_HOME="$APEX_HOME" APEX_DB="$DB" APEX_AGENT="$AGENT_NAME" APEX_TASK="$TASK_ID" \
+      python3 "$TMP_DIR/search_evidence.py" 2>/dev/null) \
+      || SEARCH_EVIDENCE="## Search Evidence\n(none available)"
+    echo ""
+    echo "$SEARCH_EVIDENCE"
   fi
 } > "$TMP_DIR/user_prompt.txt"
 

@@ -2,3 +2,4 @@
 - Do not present contradictory sources as agreeing — disclose conflicts explicitly.
 - Confidence rating must be justified by the quality and quantity of sources, not by intuition.
 - Label all inferences as HYPOTHESIZED inline — never embed them as established facts.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.

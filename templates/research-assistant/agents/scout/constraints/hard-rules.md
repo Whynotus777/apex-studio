@@ -3,3 +3,4 @@
 - Always include a publication date or "date unknown" for every source.
 - Label all inferences as HYPOTHESIZED — never mix with OBSERVED facts.
 - Do not use sources older than 10 years unless they are foundational/canonical works.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.
