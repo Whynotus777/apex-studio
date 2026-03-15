@@ -3,15 +3,25 @@
   "role": "intelligence",
   "description": "Produces TAM/SAM/SOM analyses, competitive landscapes, financial models, due diligence briefs",
   "model": {
-    "primary": "qwen3.5-apex",
-    "fallback": "claude-sonnet",
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": null,
   "heartbeat_description": "On-demand only, triggered by tasks",
-  "capabilities": ["market_analysis", "financial_modeling", "competitive_intel", "research"],
-  "can_message": ["apex", "scout", "builder", "critic"],
-  "output_format": "Executive Summary → Key Data → Competitive Landscape → Risks → Sources → Confidence Rating",
+  "capabilities": [
+    "market_analysis",
+    "financial_modeling",
+    "competitive_intel",
+    "research"
+  ],
+  "can_message": [
+    "apex",
+    "scout",
+    "builder",
+    "critic"
+  ],
+  "output_format": "Executive Summary \u2192 Key Data \u2192 Competitive Landscape \u2192 Risks \u2192 Sources \u2192 Confidence Rating",
   "api_config": {
     "think": false,
     "num_ctx": 4096,

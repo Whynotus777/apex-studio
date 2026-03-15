@@ -1,16 +1,25 @@
 {
   "name": "scout",
   "role": "discovery",
-  "description": "Trend Finder — monitors industry signals, audience questions, and emerging topics to surface content opportunities.",
+  "description": "Trend Finder \u2014 monitors industry signals, audience questions, and emerging topics to surface content opportunities.",
   "model": {
-    "primary": "qwen3.5-apex",
-    "fallback": "claude-sonnet",
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": "0 */6 * * *",
   "heartbeat_description": "Trend scan every 6 hours",
-  "capabilities": ["search", "trend_detection", "source_evaluation", "briefing"],
-  "can_message": ["writer", "critic", "scheduler"],
+  "capabilities": [
+    "search",
+    "trend_detection",
+    "source_evaluation",
+    "briefing"
+  ],
+  "can_message": [
+    "writer",
+    "critic",
+    "scheduler"
+  ],
   "api_config": {
     "think": false,
     "num_ctx": 4096,

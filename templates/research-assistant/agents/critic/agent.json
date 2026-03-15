@@ -3,15 +3,23 @@
   "role": "quality_gate",
   "description": "Reviews all research output for accuracy, citation quality, and logical consistency. Blocks output that cannot be sourced.",
   "model": {
-    "primary": "qwen3.5-apex",
+    "primary": "gemini-3-flash-preview",
     "api_review": "claude-opus",
-    "fallback": "claude-sonnet",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": null,
-  "heartbeat_description": "Continuous — processes review queue as items arrive",
-  "capabilities": ["review", "fact_checking", "citation_validation", "blocking"],
-  "can_message": ["scout", "analyst"],
+  "heartbeat_description": "Continuous \u2014 processes review queue as items arrive",
+  "capabilities": [
+    "review",
+    "fact_checking",
+    "citation_validation",
+    "blocking"
+  ],
+  "can_message": [
+    "scout",
+    "analyst"
+  ],
   "stakes_routing": {
     "low": "qwen3.5-apex",
     "medium": "claude-opus",

@@ -3,14 +3,24 @@
   "role": "development",
   "description": "Writes code, runs tests, proposes PRs. Never pushes to main.",
   "model": {
-    "primary": "qwen3.5-apex",
-    "fallback": "claude-sonnet",
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": "0 23 * * *",
   "heartbeat_description": "Nightly test suite at 11:00 PM EST",
-  "capabilities": ["code_generation", "testing", "debugging", "diff_generation"],
-  "can_message": ["apex", "scout", "analyst", "critic"],
+  "capabilities": [
+    "code_generation",
+    "testing",
+    "debugging",
+    "diff_generation"
+  ],
+  "can_message": [
+    "apex",
+    "scout",
+    "analyst",
+    "critic"
+  ],
   "api_config": {
     "think": false,
     "num_ctx": 4096,

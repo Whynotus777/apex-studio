@@ -1,17 +1,27 @@
 {
   "name": "critic",
   "role": "quality_gate",
-  "description": "Quality Gate — reviews all content for tone consistency, audience fit, originality, and approval compliance before delivery.",
+  "description": "Quality Gate \u2014 reviews all content for tone consistency, audience fit, originality, and approval compliance before delivery.",
   "model": {
-    "primary": "qwen3.5-apex",
+    "primary": "gemini-3-flash-preview",
     "api_review": "claude-opus",
-    "fallback": "claude-sonnet",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": null,
-  "heartbeat_description": "Continuous — processes review queue as items arrive",
-  "capabilities": ["review", "tone_check", "audience_fit", "originality_screening", "blocking"],
-  "can_message": ["scout", "writer", "scheduler"],
+  "heartbeat_description": "Continuous \u2014 processes review queue as items arrive",
+  "capabilities": [
+    "review",
+    "tone_check",
+    "audience_fit",
+    "originality_screening",
+    "blocking"
+  ],
+  "can_message": [
+    "scout",
+    "writer",
+    "scheduler"
+  ],
   "stakes_routing": {
     "low": "qwen3.5-apex",
     "medium": "claude-opus",

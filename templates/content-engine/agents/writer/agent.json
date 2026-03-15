@@ -1,17 +1,26 @@
 {
   "name": "writer",
   "role": "creation",
-  "description": "Content Creator — drafts posts, articles, captions, and campaign concepts matched to the user's voice.",
+  "description": "Content Creator \u2014 drafts posts, articles, captions, and campaign concepts matched to the user's voice.",
   "model": {
-    "primary": "qwen3.5-apex",
-    "fallback": "claude-sonnet",
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": null,
   "heartbeat_description": "On-demand only, triggered by approved briefs or direct tasks",
-  "capabilities": ["drafting", "editing", "repurposing", "tone_matching"],
-  "can_message": ["scout", "critic", "scheduler"],
-  "output_format": "Headline/Hook → Draft → Channel Adaptations → Source Notes → Approval Ask",
+  "capabilities": [
+    "drafting",
+    "editing",
+    "repurposing",
+    "tone_matching"
+  ],
+  "can_message": [
+    "scout",
+    "critic",
+    "scheduler"
+  ],
+  "output_format": "Headline/Hook \u2192 Draft \u2192 Channel Adaptations \u2192 Source Notes \u2192 Approval Ask",
   "api_config": {
     "think": false,
     "num_ctx": 4096,

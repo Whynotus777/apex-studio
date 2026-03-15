@@ -3,14 +3,24 @@
   "role": "discovery",
   "description": "Scans social media, news, SEC filings for market signals and opportunities",
   "model": {
-    "primary": "qwen3.5-apex",
-    "fallback": "claude-sonnet",
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": "0 */4 * * *",
   "heartbeat_description": "Scan every 4 hours",
-  "capabilities": ["search", "signal_detection", "trend_analysis", "multimodal"],
-  "can_message": ["apex", "analyst", "builder", "critic"],
+  "capabilities": [
+    "search",
+    "signal_detection",
+    "trend_analysis",
+    "multimodal"
+  ],
+  "can_message": [
+    "apex",
+    "analyst",
+    "builder",
+    "critic"
+  ],
   "api_config": {
     "think": false,
     "num_ctx": 4096,

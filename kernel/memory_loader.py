@@ -37,7 +37,10 @@ def save_agent_memory(
     task_id = os.environ.get("APEX_TASK_ID") or None
 
     if scratchpad_update and scratchpad_update != "None":
-        working_memory.append(agent_id, scratchpad_update, session_id)
+        try:
+            working_memory.append(agent_id, scratchpad_update, session_id)
+        except FileNotFoundError:
+            pass  # workspace-scoped agents share a template scratchpad; skip file write
 
     session_memory.save(agent_id, session_id, task_id, context)
 

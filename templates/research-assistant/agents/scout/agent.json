@@ -3,14 +3,22 @@
   "role": "discovery",
   "description": "Scans academic sources, news, reports, and databases for relevant signals and primary sources",
   "model": {
-    "primary": "qwen3.5-apex",
-    "fallback": "claude-sonnet",
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
     "local": "qwen3.5-apex"
   },
   "heartbeat": "0 */6 * * *",
   "heartbeat_description": "Scan every 6 hours",
-  "capabilities": ["search", "signal_detection", "source_evaluation", "citation_extraction"],
-  "can_message": ["analyst", "critic"],
+  "capabilities": [
+    "search",
+    "signal_detection",
+    "source_evaluation",
+    "citation_extraction"
+  ],
+  "can_message": [
+    "analyst",
+    "critic"
+  ],
   "api_config": {
     "think": false,
     "num_ctx": 4096,

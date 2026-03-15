@@ -13,6 +13,7 @@ import urllib.error
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
 def call_ollama(model, system_prompt, user_prompt, temperature=0.3):
     payload = json.dumps({
@@ -74,6 +75,54 @@ def call_claude(model, system_prompt, user_prompt, temperature=0.3):
         return ""
 
 
+def call_gemini(model, system_prompt, user_prompt, temperature=0.3):
+    if not GOOGLE_API_KEY:
+        print("No GOOGLE_API_KEY set for Gemini", file=sys.stderr)
+        return ""
+
+    payload = json.dumps({
+        "system_instruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": user_prompt}]
+        }],
+        "generationConfig": {
+            "temperature": temperature,
+        }
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GOOGLE_API_KEY}"
+        ),
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            candidates = data.get("candidates", [])
+            if not candidates:
+                return ""
+            content = candidates[0].get("content", {})
+            parts = content.get("parts", [])
+            texts = [part.get("text", "") for part in parts if isinstance(part, dict) and part.get("text")]
+            return "\n".join(texts).strip()
+    except urllib.error.HTTPError as e:
+        try:
+            error_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            error_body = str(e)
+        print(f"Gemini HTTP error: {e.code} {error_body}", file=sys.stderr)
+        return ""
+    except Exception as e:
+        print(f"Gemini error: {e}", file=sys.stderr)
+        return ""
+
+
 def main():
     if len(sys.argv) < 4:
         print("Usage: call_model.py <model> <system_prompt_file> <user_prompt_file> [temperature]", file=sys.stderr)
@@ -89,6 +138,8 @@ def main():
         result = call_claude("claude-opus-4-20250514", system_prompt, user_prompt, temperature)
     elif model.startswith("claude-sonnet"):
         result = call_claude("claude-sonnet-4-20250514", system_prompt, user_prompt, temperature)
+    elif model.startswith("gemini"):
+        result = call_gemini(model, system_prompt, user_prompt, temperature)
     else:
         result = call_ollama(model, system_prompt, user_prompt, temperature)
 
