@@ -626,6 +626,453 @@ class ApexKernel:
             os.unlink(sys_path)
             os.unlink(usr_path)
 
+    # ------------------------------------------------------------------ #
+    # Tool primitive                                                       #
+    # ------------------------------------------------------------------ #
+
+    _VALID_PERMISSION_LEVELS = {"read_only", "draft", "write_with_approval", "full_write"}
+
+    def register_tool(self, config: dict[str, Any]) -> str:
+        tool_id = str(config.get("id") or config.get("name") or "").strip().lower().replace(" ", "_")
+        if not tool_id:
+            raise ValueError("Tool config must include 'id' or 'name'.")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO tools (id, name, adapter, auth_method, scopes, read_write, cost_per_call, approval_required)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tool_id,
+                    config.get("name", tool_id),
+                    config.get("adapter"),
+                    config.get("auth_method"),
+                    json.dumps(config.get("scopes", [])) if isinstance(config.get("scopes"), list) else config.get("scopes"),
+                    config.get("read_write", "read"),
+                    float(config.get("cost_per_call", 0)),
+                    int(bool(config.get("approval_required", False))),
+                ),
+            )
+            conn.commit()
+        return tool_id
+
+    def grant_tool_access(self, agent_id: str, tool_id: str, level: str) -> None:
+        self._ensure_agent_exists(agent_id)
+        level = level.strip()
+        if level not in self._VALID_PERMISSION_LEVELS:
+            raise ValueError(f"Invalid permission level '{level}'. Choose from: {sorted(self._VALID_PERMISSION_LEVELS)}")
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM tools WHERE id = ?", (tool_id,)).fetchone() is None:
+                raise ValueError(f"Tool '{tool_id}' does not exist.")
+            conn.execute(
+                """
+                INSERT INTO tool_grants (agent_id, tool_id, permission_level)
+                VALUES (?, ?, ?)
+                ON CONFLICT(agent_id, tool_id) DO UPDATE SET permission_level = excluded.permission_level
+                """,
+                (agent_id, tool_id, level),
+            )
+            conn.commit()
+
+    def revoke_tool_access(self, agent_id: str, tool_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM tool_grants WHERE agent_id = ? AND tool_id = ?",
+                (agent_id, tool_id),
+            )
+            conn.commit()
+
+    def get_agent_tools(self, agent_id: str) -> list[dict[str, Any]]:
+        self._ensure_agent_exists(agent_id)
+        return self._fetch_all(
+            """
+            SELECT tg.id AS grant_id, tg.permission_level, tg.created_at AS granted_at,
+                   t.id AS tool_id, t.name, t.adapter, t.auth_method, t.scopes,
+                   t.read_write, t.cost_per_call, t.approval_required
+            FROM tool_grants tg
+            JOIN tools t ON t.id = tg.tool_id
+            WHERE tg.agent_id = ?
+            ORDER BY t.name
+            """,
+            (agent_id,),
+        )
+
+    def invoke_tool(self, agent_id: str, tool_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._ensure_agent_exists(agent_id)
+        with self._connect() as conn:
+            grant = conn.execute(
+                "SELECT permission_level FROM tool_grants WHERE agent_id = ? AND tool_id = ?",
+                (agent_id, tool_id),
+            ).fetchone()
+            if grant is None:
+                raise PermissionError(f"Agent '{agent_id}' has no access to tool '{tool_id}'.")
+
+            tool = conn.execute("SELECT * FROM tools WHERE id = ?", (tool_id,)).fetchone()
+            if tool is None:
+                raise ValueError(f"Tool '{tool_id}' does not exist.")
+
+        level = grant["permission_level"]
+        tool_rw = tool["read_write"]
+        approval_required = bool(tool["approval_required"])
+        cost = float(tool["cost_per_call"] or 0)
+
+        # Write-capable operations require at least write_with_approval
+        if tool_rw == "write" and level == "read_only":
+            raise PermissionError(
+                f"Agent '{agent_id}' has read_only access to '{tool_id}' but tool requires write."
+            )
+        # Approval-required tools need write_with_approval or full_write
+        if approval_required and level in ("read_only", "draft"):
+            raise PermissionError(
+                f"Tool '{tool_id}' requires approval. "
+                f"Agent '{agent_id}' needs write_with_approval or full_write level (has: {level})."
+            )
+
+        # Record cost against budget if tool has a cost
+        if cost > 0:
+            try:
+                status = self.check_budget(agent_id, "tool_cost", cost)
+                if status == "denied":
+                    raise PermissionError(f"Agent '{agent_id}' is over budget for tool invocations.")
+                self.record_spend(agent_id, "tool_cost", cost, f"invoke:{tool_id}")
+            except ValueError:
+                pass  # No budget set — allow invocation without tracking
+
+        return {
+            "tool_id": tool_id,
+            "agent_id": agent_id,
+            "permission_level": level,
+            "params": params or {},
+            "status": "authorized",
+        }
+
+    # ------------------------------------------------------------------ #
+    # Permission primitive                                                 #
+    # ------------------------------------------------------------------ #
+
+    def set_permission(
+        self,
+        agent_id: str,
+        resource: str,
+        level: str,
+        max_spend_per_day: float | None = None,
+        requires_approval: bool = False,
+    ) -> None:
+        self._ensure_agent_exists(agent_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO permissions (agent_id, resource, level, max_spend_per_day, requires_approval)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(agent_id, resource) DO UPDATE SET
+                    level = excluded.level,
+                    max_spend_per_day = excluded.max_spend_per_day,
+                    requires_approval = excluded.requires_approval
+                """,
+                (agent_id, resource, level, max_spend_per_day, int(requires_approval)),
+            )
+            conn.commit()
+
+    def check_permission(self, agent_id: str, resource: str, action: str = "read") -> str:
+        """Return 'allowed', 'denied', or 'needs_approval'."""
+        row = self._fetch_all(
+            "SELECT level, requires_approval FROM permissions WHERE agent_id = ? AND resource = ?",
+            (agent_id, resource),
+        )
+        if not row:
+            return "denied"
+
+        perm = row[0]
+        level = perm["level"]
+        requires_approval = bool(perm["requires_approval"])
+
+        # Write actions require at least draft level
+        if action == "write" and level == "read_only":
+            return "denied"
+        if requires_approval:
+            return "needs_approval"
+        return "allowed"
+
+    def get_agent_permissions(self, agent_id: str) -> list[dict[str, Any]]:
+        self._ensure_agent_exists(agent_id)
+        return self._fetch_all(
+            """
+            SELECT id, agent_id, resource, level, max_spend_per_day, requires_approval, created_at
+            FROM permissions
+            WHERE agent_id = ?
+            ORDER BY resource
+            """,
+            (agent_id,),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Budget primitive                                                     #
+    # ------------------------------------------------------------------ #
+
+    def set_budget(
+        self,
+        agent_id: str,
+        budget_type: str,
+        limit_amount: float,
+        period: str = "daily",
+        alert_threshold: float = 0.8,
+    ) -> None:
+        self._ensure_agent_exists(agent_id)
+        if limit_amount <= 0:
+            raise ValueError("limit_amount must be positive.")
+        if not (0 < alert_threshold <= 1):
+            raise ValueError("alert_threshold must be between 0 and 1 (e.g. 0.8 = 80%).")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO budgets (agent_id, budget_type, limit_amount, period, alert_threshold)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(agent_id, budget_type) DO UPDATE SET
+                    limit_amount = excluded.limit_amount,
+                    period = excluded.period,
+                    alert_threshold = excluded.alert_threshold
+                """,
+                (agent_id, budget_type, float(limit_amount), period, float(alert_threshold)),
+            )
+            conn.commit()
+
+    def record_spend(self, agent_id: str, budget_type: str, amount: float, description: str = "") -> None:
+        with self._connect() as conn:
+            budget = conn.execute(
+                "SELECT id, limit_amount, spent_amount FROM budgets WHERE agent_id = ? AND budget_type = ?",
+                (agent_id, budget_type),
+            ).fetchone()
+            if budget is None:
+                raise ValueError(f"No budget found for agent '{agent_id}', type '{budget_type}'.")
+
+            new_spent = float(budget["spent_amount"]) + float(amount)
+            if new_spent > float(budget["limit_amount"]):
+                raise PermissionError(
+                    f"Spend of {amount} would exceed budget limit {budget['limit_amount']} "
+                    f"for agent '{agent_id}' type '{budget_type}' "
+                    f"(current: {budget['spent_amount']})."
+                )
+
+            conn.execute(
+                "UPDATE budgets SET spent_amount = ? WHERE id = ?",
+                (new_spent, budget["id"]),
+            )
+            conn.execute(
+                "INSERT INTO spend_log (agent_id, budget_id, amount, description) VALUES (?, ?, ?, ?)",
+                (agent_id, budget["id"], float(amount), description),
+            )
+            conn.commit()
+
+    def get_budget_status(self, agent_id: str) -> list[dict[str, Any]]:
+        self._ensure_agent_exists(agent_id)
+        budgets = self._fetch_all(
+            """
+            SELECT id, agent_id, budget_type, limit_amount, spent_amount, period, alert_threshold, created_at
+            FROM budgets
+            WHERE agent_id = ?
+            ORDER BY budget_type
+            """,
+            (agent_id,),
+        )
+        for b in budgets:
+            limit = float(b["limit_amount"])
+            spent = float(b["spent_amount"])
+            threshold = float(b["alert_threshold"])
+            remaining = limit - spent
+            b["remaining"] = round(remaining, 6)
+            b["utilization"] = round(spent / limit, 4) if limit > 0 else 0
+            b["status"] = (
+                "over_limit" if spent >= limit
+                else "warning" if spent >= threshold * limit
+                else "ok"
+            )
+        return budgets
+
+    def check_budget(self, agent_id: str, budget_type: str, amount: float) -> str:
+        """Return 'allowed', 'warning', or 'denied'."""
+        rows = self._fetch_all(
+            "SELECT limit_amount, spent_amount, alert_threshold FROM budgets WHERE agent_id = ? AND budget_type = ?",
+            (agent_id, budget_type),
+        )
+        if not rows:
+            raise ValueError(f"No budget found for agent '{agent_id}', type '{budget_type}'.")
+
+        b = rows[0]
+        limit = float(b["limit_amount"])
+        spent = float(b["spent_amount"])
+        threshold = float(b["alert_threshold"])
+        projected = spent + float(amount)
+
+        if projected > limit:
+            return "denied"
+        if projected >= threshold * limit:
+            return "warning"
+        return "allowed"
+
+    # ------------------------------------------------------------------ #
+    # Template primitive                                                   #
+    # ------------------------------------------------------------------ #
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        """Return a summary list of all available templates."""
+        templates_dir = self.apex_home / "templates"
+        result = []
+        if not templates_dir.exists():
+            return result
+        for entry in sorted(templates_dir.iterdir()):
+            manifest_path = entry / "template.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                result.append({
+                    "id": entry.name,
+                    "name": manifest.get("name", entry.name),
+                    "description": manifest.get("description", ""),
+                    "category": manifest.get("category", ""),
+                    "version": manifest.get("version", ""),
+                    "agent_count": len(manifest.get("agents", [])),
+                    "pipeline": manifest.get("pipeline", []),
+                })
+            except (json.JSONDecodeError, OSError):
+                continue
+        return result
+
+    def get_template(self, template_id: str) -> dict[str, Any]:
+        """Return the full manifest for a given template_id."""
+        manifest_path = self.apex_home / "templates" / template_id / "template.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Template '{template_id}' not found at {manifest_path}")
+        return json.loads(manifest_path.read_text())
+
+    def launch_template(self, template_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """
+        Instantiate a template: create agents, apply permissions and budgets.
+
+        Returns a summary dict with keys:
+          template_name, template_id, agents_created, permissions_applied, budgets_applied
+        """
+        manifest = self.get_template(template_id)
+
+        # Validate required fields
+        missing = [f for f in ("name", "agents", "pipeline") if f not in manifest]
+        if missing:
+            raise ValueError(f"Template '{template_id}' missing required fields: {missing}")
+
+        overrides = overrides or {}
+        agent_overrides: dict[str, Any] = overrides.get("agents", {})
+
+        template_dir = self.apex_home / "templates" / template_id
+        agents_dir = template_dir / "agents"
+
+        agents_created: list[str] = []
+        permissions_applied = 0
+        budgets_applied = 0
+
+        for agent_cfg in manifest.get("agents", []):
+            agent_id = str(agent_cfg.get("name") or "").strip()
+            if not agent_id:
+                continue
+
+            # Merge per-agent overrides
+            if agent_id in agent_overrides:
+                agent_cfg = {**agent_cfg, **agent_overrides[agent_id]}
+
+            agent_dir = agents_dir / agent_id
+            agent_dir.joinpath("constraints").mkdir(parents=True, exist_ok=True)
+            agent_dir.joinpath("workspace").mkdir(parents=True, exist_ok=True)
+
+            agent_json = {
+                "name": agent_id,
+                "role": agent_cfg.get("role", "custom"),
+                "description": agent_cfg.get("description", ""),
+                "model": agent_cfg.get("model", {"primary": "qwen3.5-apex", "fallback": "claude-sonnet"}),
+                "heartbeat": agent_cfg.get("heartbeat"),
+                "heartbeat_description": agent_cfg.get("heartbeat_description"),
+                "capabilities": agent_cfg.get("capabilities", []),
+                "can_message": agent_cfg.get("can_message", []),
+                "api_config": agent_cfg.get("api_config", {"think": False, "num_ctx": 4096, "temperature": 0.3}),
+            }
+
+            # Write files only if they don't already exist
+            agent_json_path = agent_dir / "agent.json"
+            if not agent_json_path.exists():
+                agent_json_path.write_text(json.dumps(agent_json, indent=2) + "\n")
+            for fname in ("AGENTS.md",):
+                p = agent_dir / fname
+                if not p.exists():
+                    p.write_text("")
+            for fname in ("hard-rules.md", "soft-preferences.md", "anti-patterns.md"):
+                p = agent_dir / "constraints" / fname
+                if not p.exists():
+                    p.write_text("")
+            scratch = agent_dir / "workspace" / "scratchpad.md"
+            if not scratch.exists():
+                scratch.write_text("")
+
+            # Register agent (INSERT OR IGNORE — skip if already in DB)
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO agent_status (agent_name, status, model_active, meta)
+                    VALUES (?, 'idle', ?, ?)
+                    """,
+                    (
+                        agent_id,
+                        agent_json["model"].get("primary", "qwen3.5-apex"),
+                        json.dumps({"paused": False, "config_path": str(agent_json_path)}),
+                    ),
+                )
+                conn.commit()
+                if cur.rowcount > 0:
+                    agents_created.append(agent_id)
+
+            # Apply default_permissions from manifest to this agent
+            default_perms = manifest.get("default_permissions", {})
+            if isinstance(default_perms, dict):
+                for category, resources in default_perms.items():
+                    if isinstance(resources, dict):
+                        for resource_key, perm_value in resources.items():
+                            resource = f"{category}.{resource_key}"
+                            level, requires_approval = self._map_template_permission(perm_value)
+                            self.set_permission(agent_id, resource, level, requires_approval=requires_approval)
+                            permissions_applied += 1
+
+            # Apply default_budgets if present
+            for budget_type, budget_cfg in manifest.get("default_budgets", {}).items():
+                if isinstance(budget_cfg, dict):
+                    self.set_budget(
+                        agent_id,
+                        budget_type,
+                        float(budget_cfg.get("limit", 100.0)),
+                        period=budget_cfg.get("period", "daily"),
+                        alert_threshold=float(budget_cfg.get("alert_threshold", 0.8)),
+                    )
+                    budgets_applied += 1
+
+        return {
+            "template_name": manifest["name"],
+            "template_id": template_id,
+            "agents_created": agents_created,
+            "permissions_applied": permissions_applied,
+            "budgets_applied": budgets_applied,
+        }
+
+    def _map_template_permission(self, value: str) -> tuple[str, bool]:
+        """Map a human-readable template permission descriptor to (level, requires_approval)."""
+        mapping: dict[str, tuple[str, bool]] = {
+            "allowed_with_task_assignment": ("full_write", False),
+            "approval_required": ("write_with_approval", True),
+            "human_approval_required": ("draft", True),
+            "allowlisted": ("read_only", False),
+            "disabled_in_phase_1_5": ("read_only", True),
+            "read_only": ("read_only", False),
+            "full_write": ("full_write", False),
+            "write_with_approval": ("write_with_approval", False),
+            "draft": ("draft", False),
+        }
+        return mapping.get(str(value).strip(), ("read_only", False))
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row

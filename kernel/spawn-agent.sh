@@ -79,7 +79,36 @@ Valid message targets: apex, scout, analyst, builder, critic. No other targets a
 If no messages needed, use an empty array: "messages": []
 SYSEOF
 
+MEMORY_JSON=$(python3 "$APEX_HOME/kernel/memory_loader.py" load "$AGENT_NAME" 2>/dev/null) || MEMORY_JSON=""
+SESSION_CONTEXT=""
+WORKING_MEMORY=""
+DURABLE_MEMORY=""
+
+if [ -n "$MEMORY_JSON" ]; then
+  SESSION_CONTEXT=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_context',''))" 2>/dev/null)
+  WORKING_MEMORY=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('working_memory',''))" 2>/dev/null)
+  DURABLE_MEMORY=$(echo "$MEMORY_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('durable_memory',''))" 2>/dev/null)
+fi
+
 {
+  if [ -n "$SESSION_CONTEXT" ]; then
+    echo "Latest session context:"
+    echo "$SESSION_CONTEXT"
+    echo ""
+  fi
+
+  if [ -n "$WORKING_MEMORY" ]; then
+    echo "Working memory:"
+    echo "$WORKING_MEMORY"
+    echo ""
+  fi
+
+  if [ -n "$DURABLE_MEMORY" ]; then
+    echo "Durable memory:"
+    echo "$DURABLE_MEMORY"
+    echo ""
+  fi
+
   INBOX=$(db_query "SELECT from_agent, content FROM agent_messages
     WHERE to_agent='$AGENT_NAME' AND status='pending'
     ORDER BY priority ASC LIMIT 5;")
@@ -179,20 +208,9 @@ fi
 PARSE_METHOD=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('_parse_method','unknown'))" 2>/dev/null)
 log "Parse method: $PARSE_METHOD"
 
-# Save session
-ESCAPED=$(echo "$RESPONSE" | head -200 | sed "s/'/''/g")
-db_query "INSERT OR REPLACE INTO agent_sessions (id, agent_name, task_id, context, last_active, status)
-  VALUES ('$SESSION_ID','$AGENT_NAME','$TASK_ID','$ESCAPED',datetime('now'),'active');"
-
-# Append to scratchpad
 SCRATCHPAD=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('scratchpad_update',''))" 2>/dev/null)
-if [ -n "$SCRATCHPAD" ] && [ "$SCRATCHPAD" != "None" ] && [ "$SCRATCHPAD" != "" ]; then
-  {
-    echo ""
-    echo "--- $SESSION_ID | $(date '+%Y-%m-%d %H:%M:%S') | Task: ${TASK_ID:-heartbeat} ---"
-    echo "$SCRATCHPAD"
-  } >> "$AGENT_DIR/workspace/scratchpad.md"
-fi
+MEMORY_SESSION_CONTEXT="$RESPONSE" APEX_TASK_ID="$TASK_ID" python3 "$APEX_HOME/kernel/memory_loader.py" \
+  save "$AGENT_NAME" "$SESSION_ID" "$SCRATCHPAD" 2>/dev/null || true
 
 # Process messages via parser (handles allowlist internally)
 echo "$PARSED" | python3 -c "

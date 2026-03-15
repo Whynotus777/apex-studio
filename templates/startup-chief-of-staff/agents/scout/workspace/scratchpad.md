@@ -42,3 +42,6 @@ Task requires data that is impossible to retrieve without search tools. Must rep
 
 --- sess-scout-1773551945 | 2026-03-15 01:21:16 | Task: test-scout-001 ---
 Session blocked for all research tasks requiring external data verification. Must request tool activation before proceeding.
+
+--- sess-scout-1773552927 | 2026-03-15 01:37:23 | Task: test-scout-001 ---
+Task requires market signal discovery but is blocked due to lack of search tools. Must wait for tool activation before generating valid signals.

@@ -57,3 +57,57 @@ CREATE TABLE IF NOT EXISTS evals (
     score REAL, max_score REAL, notes TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
+-- Phase B: Tool primitive
+CREATE TABLE IF NOT EXISTS tools (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    adapter TEXT,
+    auth_method TEXT,
+    scopes TEXT,
+    read_write TEXT DEFAULT 'read',
+    cost_per_call REAL DEFAULT 0,
+    approval_required INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS tool_grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    tool_id TEXT NOT NULL REFERENCES tools(id),
+    permission_level TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(agent_id, tool_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_grants_agent ON tool_grants(agent_id);
+-- Phase B: Permission primitive
+CREATE TABLE IF NOT EXISTS permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    level TEXT NOT NULL,
+    max_spend_per_day REAL,
+    requires_approval INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(agent_id, resource)
+);
+CREATE INDEX IF NOT EXISTS idx_permissions_agent ON permissions(agent_id);
+-- Phase B: Budget primitive
+CREATE TABLE IF NOT EXISTS budgets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    budget_type TEXT NOT NULL,
+    limit_amount REAL NOT NULL,
+    spent_amount REAL DEFAULT 0,
+    period TEXT DEFAULT 'daily',
+    alert_threshold REAL DEFAULT 0.8,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(agent_id, budget_type)
+);
+CREATE TABLE IF NOT EXISTS spend_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    budget_id INTEGER REFERENCES budgets(id),
+    amount REAL NOT NULL,
+    description TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_spend_log_agent ON spend_log(agent_id, created_at);
