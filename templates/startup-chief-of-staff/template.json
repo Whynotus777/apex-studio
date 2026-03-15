@@ -1,0 +1,150 @@
+{
+  "name": "Startup Chief of Staff",
+  "description": "A five-agent startup operating system template for opportunity discovery, market analysis, execution support, quality review, and operator orchestration.",
+  "category": "startup",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "apex",
+      "role": "orchestrator",
+      "description": "Routes messages, resolves conflicts, maintains shared memory, sends morning rollups",
+      "model": {
+        "primary": "claude-opus",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 8 * * *",
+      "heartbeat_description": "Morning rollup at 8:00 AM EST",
+      "capabilities": ["route", "prioritize", "escalate", "memory_write", "rollup"],
+      "can_message": ["scout", "analyst", "builder", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "analyst",
+      "role": "intelligence",
+      "description": "Produces TAM/SAM/SOM analyses, competitive landscapes, financial models, due diligence briefs",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by tasks",
+      "capabilities": ["market_analysis", "financial_modeling", "competitive_intel", "research"],
+      "can_message": ["apex", "scout", "builder", "critic"],
+      "output_format": "Executive Summary → Key Data → Competitive Landscape → Risks → Sources → Confidence Rating",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    },
+    {
+      "name": "builder",
+      "role": "development",
+      "description": "Writes code, runs tests, proposes PRs. Never pushes to main.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 23 * * *",
+      "heartbeat_description": "Nightly test suite at 11:00 PM EST",
+      "capabilities": ["code_generation", "testing", "debugging", "diff_generation"],
+      "can_message": ["apex", "scout", "analyst", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Reviews all agent output. Two-tier: local triage for low-stakes, API deep review for high-stakes.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "api_review": "claude-opus",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as items arrive",
+      "capabilities": ["review", "scoring", "feedback", "blocking"],
+      "can_message": ["apex", "scout", "analyst", "builder"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    },
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Scans social media, news, SEC filings for market signals and opportunities",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 */4 * * *",
+      "heartbeat_description": "Scan every 4 hours",
+      "capabilities": ["search", "signal_detection", "trend_analysis", "multimodal"],
+      "can_message": ["apex", "analyst", "builder", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.4
+      }
+    }
+  ],
+  "pipeline": ["discover", "analyze", "validate", "build", "launch", "grow"],
+  "default_permissions": {
+    "autonomy": {
+      "task_execution": "allowed_with_task_assignment",
+      "external_actions": "approval_required",
+      "high_stakes_actions": "human_approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "escalation_target": "apex",
+      "user_channel": "telegram_optional"
+    },
+    "data_access": {
+      "database": "sqlite_local",
+      "working_memory": "template_workspace_files",
+      "durable_memory_write": "apex_only",
+      "external_search": "disabled_in_phase_1_5"
+    }
+  },
+  "heartbeats": {
+    "apex": {
+      "schedule": "0 8 * * *",
+      "source": "kernel/crontab",
+      "description": "Morning rollup — 8:00 AM EST"
+    },
+    "scout": {
+      "schedule": "0 */4 * * *",
+      "source": "kernel/crontab",
+      "description": "Scout scan — every 4 hours"
+    },
+    "builder": {
+      "schedule": "0 23 * * *",
+      "source": "kernel/crontab",
+      "description": "Builder nightly — 11:00 PM EST"
+    },
+    "analyst": null,
+    "critic": null
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search", "github", "telegram"]
+}
