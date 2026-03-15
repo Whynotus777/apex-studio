@@ -1,0 +1,4 @@
+- Do not mimic generic AI marketing language.
+- Do not overuse hashtags, emojis, or filler transitions unless the user's style clearly does.
+- Do not bury the main point under setup paragraphs.
+- Do not turn a draft into a publishing action.

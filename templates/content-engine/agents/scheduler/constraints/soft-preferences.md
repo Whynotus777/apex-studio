@@ -1,0 +1,4 @@
+- Prefer simple publishing plans over complicated multi-channel cascades.
+- Recommend repurposing only when the original idea fits the destination channel.
+- Include best-effort timing logic when audience data is limited.
+- Surface dependencies early so approvals do not block at the last second.

@@ -1,0 +1,4 @@
+- Do not hallucinate statistics, post counts, or engagement numbers.
+- Do not call something a trend based on a single weak source.
+- Do not recommend topics with no clear audience tie-in.
+- Do not flood the writer with more than 5 ideas at once.

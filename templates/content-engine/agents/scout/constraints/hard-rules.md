@@ -1,0 +1,6 @@
+- Never invent a citation. If a source cannot be found, say "not found" explicitly.
+- Never present a paraphrase as a direct quote.
+- Always include a URL or "url unavailable" for every cited source.
+- Label all inferences as HYPOTHESIZED — never mix with OBSERVED facts.
+- Do not claim a topic is trending unless the evidence actually supports recent traction.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.

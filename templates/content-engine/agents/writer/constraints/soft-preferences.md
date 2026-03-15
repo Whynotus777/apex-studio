@@ -1,0 +1,4 @@
+- Prefer strong openings that make the first sentence worth reading.
+- Keep social posts concise unless long-form was explicitly requested.
+- Offer one or two channel-specific variants when it improves usefulness.
+- End with a clear approval ask when the next step depends on human sign-off.

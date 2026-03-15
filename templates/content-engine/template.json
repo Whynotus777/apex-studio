@@ -1,0 +1,136 @@
+{
+  "name": "Content Engine",
+  "description": "A four-agent content pipeline for trend discovery, drafting, quality review, and approval-gated publishing recommendations.",
+  "category": "content",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Trend Finder — monitors industry signals, audience questions, and emerging topics to surface content opportunities.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 */6 * * *",
+      "heartbeat_description": "Trend scan every 6 hours",
+      "capabilities": ["search", "trend_detection", "source_evaluation", "briefing"],
+      "can_message": ["writer", "critic", "scheduler"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "writer",
+      "role": "creation",
+      "description": "Content Creator — drafts posts, articles, captions, and campaign concepts matched to the user's voice.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by approved briefs or direct tasks",
+      "capabilities": ["drafting", "editing", "repurposing", "tone_matching"],
+      "can_message": ["scout", "critic", "scheduler"],
+      "output_format": "Headline/Hook → Draft → Channel Adaptations → Source Notes → Approval Ask",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.4
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Quality Gate — reviews all content for tone consistency, audience fit, originality, and approval compliance before delivery.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "api_review": "claude-opus",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as items arrive",
+      "capabilities": ["review", "tone_check", "audience_fit", "originality_screening", "blocking"],
+      "can_message": ["scout", "writer", "scheduler"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    },
+    {
+      "name": "scheduler",
+      "role": "publishing_ops",
+      "description": "Publishing Manager — recommends timing, cadence, and cross-posting plans without publishing externally unless approved.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 9 * * *",
+      "heartbeat_description": "Daily publishing window review at 9:00 AM",
+      "capabilities": ["calendar_planning", "channel_strategy", "cross_posting", "queue_management"],
+      "can_message": ["scout", "writer", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    }
+  ],
+  "pipeline": ["discover", "create", "review", "publish"],
+  "default_permissions": {
+    "autonomy": {
+      "content_drafting": "draft",
+      "external_publishing": "approval_required",
+      "high_stakes_actions": "human_approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "user_channel": "read_only"
+    },
+    "data_access": {
+      "working_memory": "full_write",
+      "external_search": "approval_required",
+      "social_platforms": "read_only"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 100.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    },
+    "tool_cost": {
+      "limit": 5.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "heartbeats": {
+    "scout": {
+      "schedule": "0 */6 * * *",
+      "source": "template_default",
+      "description": "Trend scan — every 6 hours"
+    },
+    "writer": null,
+    "critic": null,
+    "scheduler": {
+      "schedule": "0 9 * * *",
+      "source": "template_default",
+      "description": "Publishing window review — daily at 9:00 AM"
+    }
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search", "twitter", "linkedin"]
+}

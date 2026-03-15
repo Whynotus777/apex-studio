@@ -106,6 +106,118 @@ def _icon_for_status(status: str) -> str:
     }.get(status, "⬜")
 
 
+# ── Task-chain helpers ───────────────────────────────────────────────────────
+
+_CHAIN_TARGETS: set[str] = {"analyst", "builder"}
+_MAX_CHAIN_HOPS: int = 2
+
+
+def _next_chain_agent(workspace_id: str, messages: list[dict[str, Any]]) -> str | None:
+    """Return the workspace-namespaced agent to auto-spawn next, or None."""
+    for msg in messages:
+        target = msg.get("to", "").lower()
+        if target in _CHAIN_TARGETS:
+            agent_id = f"{workspace_id}-{target}"
+            rows = kernel._fetch_all(
+                "SELECT agent_name FROM agent_status WHERE agent_name = ?", (agent_id,)
+            )
+            if rows:
+                return agent_id
+    return None
+
+
+def _fetch_task_evidence(task_id: str) -> list[dict[str, Any]]:
+    """Pull evidence rows for a task from the DB."""
+    try:
+        return kernel._fetch_all(
+            "SELECT tool_name, query, results FROM evidence "
+            "WHERE task_id = ? ORDER BY created_at ASC",
+            (task_id,),
+        )
+    except Exception:
+        return []
+
+
+def _sources_section(task_id: str) -> str:
+    """Build a compact sources block (max 5 unique URLs)."""
+    rows = _fetch_task_evidence(task_id)
+    seen: set[str] = set()
+    entries: list[str] = []
+    for row in rows:
+        try:
+            results = (
+                json.loads(row["results"])
+                if isinstance(row["results"], str)
+                else row["results"]
+            )
+        except Exception:
+            results = []
+        for r in results:
+            if len(entries) >= 5:
+                break
+            url = r.get("url", "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            title = (r.get("title") or url)[:55]
+            entries.append(f"• {title}\n  {url}")
+        if len(entries) >= 5:
+            break
+    if not entries:
+        return "📎 Sources: (no sources retrieved)"
+    return "📎 Sources:\n" + "\n".join(entries)
+
+
+def _summarise(text: str, limit: int) -> str:
+    """Truncate text to `limit` chars, preferring a sentence boundary."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    boundary = cut.rfind(". ")
+    if boundary > limit // 2:
+        return cut[: boundary + 1]
+    return cut.rstrip() + "…"
+
+
+def _format_task_card(
+    agent_id: str,
+    result: dict[str, Any],
+    task_id: str,
+    workspace_id: str,
+) -> str:
+    """
+    Mobile-friendly agent response card.
+    Capped at 500 chars; overflow truncated with /workspace link.
+    """
+    status = result.get("status", {})
+    if isinstance(status, dict):
+        state = status.get("state", "unknown")
+        detail = (status.get("reason") or status.get("stakes") or "").strip()
+        status_text = f"{state} {detail}".strip()
+    else:
+        status_text = str(status)
+
+    actions = (result.get("actions_taken") or "").strip()
+    obs = (result.get("observations") or "").strip()
+    summary = _summarise(f"{actions} {obs}".strip(), 220)
+
+    sources = _sources_section(task_id)
+
+    lines = [
+        f"🤖 *{agent_id}*",
+        f"Status: {status_text}",
+        "",
+        summary,
+        "",
+        sources,
+    ]
+    text = "\n".join(lines)
+    if len(text) > 500:
+        text = text[:450].rstrip() + f"…\n_Full response: /workspace {workspace_id}_"
+    return text
+
+
 def _format_spawn_result(result: dict[str, Any]) -> str:
     status = result.get("status", {})
     if isinstance(status, dict):
@@ -492,20 +604,36 @@ async def task_command(update: Update, context: Any) -> None:
         return
 
     await update.message.reply_text(
-        f"📋 Task created: `{task_id}`\n"
+        f"📋 Task `{task_id}` created\n"
         f"Mission: {mission}\n"
-        f"Agent: `{agent_id}`\n\n"
-        "🚀 Spawning agent...",
+        f"Starting: `{agent_id}`\n\n"
+        "🚀 Spawning agent…",
         parse_mode="Markdown",
     )
 
-    try:
-        response = kernel.spawn_agent(agent_id, task_id)
-    except Exception as exc:
-        await update.message.reply_text(f"Agent spawn failed: {exc}")
-        return
+    current_agent = agent_id
+    for hop in range(1, _MAX_CHAIN_HOPS + 1):
+        try:
+            response = kernel.spawn_agent(current_agent, task_id)
+        except Exception as exc:
+            await update.message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
+            break
 
-    await update.message.reply_text(_truncate(_format_spawn_result(response)))
+        await update.message.reply_text(
+            _format_task_card(current_agent, response, task_id, workspace_id),
+            parse_mode="Markdown",
+        )
+
+        # Auto-chain: follow messages to analyst/builder (capped at MAX_CHAIN_HOPS)
+        if hop < _MAX_CHAIN_HOPS:
+            next_agent = _next_chain_agent(workspace_id, response.get("messages", []))
+            if next_agent:
+                await update.message.reply_text(
+                    f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown"
+                )
+                current_agent = next_agent
+                continue
+        break
 
 
 async def approvals_command(update: Update, context: Any) -> None:

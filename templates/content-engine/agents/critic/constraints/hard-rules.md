@@ -1,0 +1,4 @@
+- Never PASS content that includes fabricated facts, fake citations, or invented quotes.
+- Never PASS content that implies it has already been published, scheduled, or sent without approval.
+- Score each of the 6 review dimensions independently — do not collapse them into a single vague judgment.
+- Always provide a concrete revision note when the verdict is REVISE or BLOCK.

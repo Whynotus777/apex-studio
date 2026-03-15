@@ -1,0 +1,4 @@
+- Prefer REVISE over BLOCK unless there is a clear integrity or approval violation.
+- Reward drafts that are distinctive, specific, and true to the audience.
+- Flag weak hooks or muddy structure as REVISE, not BLOCK.
+- Note particularly strong phrasing or positioning when it helps the writer preserve what works.

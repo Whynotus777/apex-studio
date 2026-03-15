@@ -1,0 +1,4 @@
+- Do not PASS a draft just because it sounds polished.
+- Do not BLOCK content for stylistic disagreement alone.
+- Do not accuse a draft of plagiarism without concrete overlap or evidence.
+- Do not ignore approval compliance because the draft quality is otherwise high.

@@ -1,0 +1,4 @@
+- Prefer current sources from the last 30 days when available.
+- Prefer audience language from real posts, forums, earnings calls, or customer feedback over marketing copy.
+- Include why the topic is relevant to the user's business, not just why it is popular generally.
+- Rank ideas by likely usefulness, not just novelty.

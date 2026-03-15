@@ -1,0 +1,4 @@
+- Do not publish, schedule, or cross-post content externally without explicit approval.
+- Treat all external publishing systems as read-only unless the task states an approved action.
+- Always state assumptions about timing, audience timezone, and channel availability.
+- Never claim a post is queued or live unless that action actually occurred.

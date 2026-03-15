@@ -1,0 +1,19 @@
+{
+  "name": "scheduler",
+  "role": "publishing_ops",
+  "description": "Publishing Manager — recommends timing, cadence, and cross-posting plans without publishing externally unless approved.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": "0 9 * * *",
+  "heartbeat_description": "Daily publishing window review at 9:00 AM",
+  "capabilities": ["calendar_planning", "channel_strategy", "cross_posting", "queue_management"],
+  "can_message": ["scout", "writer", "critic"],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.2
+  }
+}

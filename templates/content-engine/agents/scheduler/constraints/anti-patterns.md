@@ -1,0 +1,4 @@
+- Do not present speculative timing advice as proven fact.
+- Do not recommend publishing to every channel by default.
+- Do not confuse planning with execution.
+- Do not hide missing approvals in footnotes.
