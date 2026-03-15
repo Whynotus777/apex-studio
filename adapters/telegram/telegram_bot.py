@@ -20,7 +20,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from kernel.api import ApexKernel
+# Ensure repo root is on sys.path so `from kernel.api import ...` resolves
+# regardless of working directory or PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from kernel.api import ApexKernel  # noqa: E402
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -57,6 +61,18 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 kernel = ApexKernel(APEX_HOME)
+
+# Pipeline stage → agent role name
+_PIPELINE_ROLE_MAP: dict[str, str] = {
+    "discover": "scout",
+    "analyze": "analyst",
+    "analyse": "analyst",
+    "build": "builder",
+    "validate": "critic",
+    "review": "critic",
+    "grow": "apex",
+    "launch": "apex",
+}
 
 
 def _ensure_runtime_ready() -> None:
@@ -127,6 +143,10 @@ def _agent_status_summary(agent_id: str) -> dict[str, Any]:
     status = kernel.get_agent_status(agent_id)
     meta = status.get("meta", {}) or {}
     status["config_path"] = meta.get("config_path", "")
+    # workspace_id lives on the agent_status row (column) and also in meta
+    # get_agent_status() doesn't SELECT workspace_id, so pull from meta fallback
+    if "workspace_id" not in status or status["workspace_id"] is None:
+        status["workspace_id"] = meta.get("workspace_id")
     return status
 
 
@@ -134,19 +154,49 @@ def _list_agent_names() -> list[str]:
     rows = kernel._fetch_all("SELECT agent_name FROM agent_status ORDER BY agent_name ASC")
     return [row["agent_name"] for row in rows]
 
+
 def _list_agent_rows(workspace_id: str | None = None) -> list[dict[str, Any]]:
     if workspace_id:
         return kernel._fetch_all(
-            """
-            SELECT agent_name
-            FROM agent_status
-            WHERE workspace_id = ?
-            ORDER BY agent_name ASC
-            """,
+            "SELECT agent_name FROM agent_status WHERE workspace_id = ? ORDER BY agent_name ASC",
             (workspace_id,),
         )
     return kernel._fetch_all("SELECT agent_name FROM agent_status ORDER BY agent_name ASC")
 
+
+def _get_or_ensure_inbox_goal() -> str | None:
+    """Return the first active goal id, or None if the goals table is empty."""
+    rows = kernel._fetch_all(
+        "SELECT id FROM goals WHERE status = 'active' ORDER BY created_at ASC LIMIT 1"
+    )
+    return rows[0]["id"] if rows else None
+
+
+def _resolve_start_agent(workspace_id: str, template_id: str) -> str | None:
+    """
+    Map the first pipeline stage of the template to a workspace-namespaced agent.
+    Returns the agent_id string or None if it cannot be resolved.
+    """
+    try:
+        manifest = kernel.get_template(template_id)
+    except FileNotFoundError:
+        return None
+    pipeline = manifest.get("pipeline", [])
+    if not pipeline:
+        return None
+    first_stage = pipeline[0].lower()
+    role = _PIPELINE_ROLE_MAP.get(first_stage)
+    if not role:
+        return None
+    agent_id = f"{workspace_id}-{role}"
+    # Verify the agent actually exists
+    rows = kernel._fetch_all(
+        "SELECT agent_name FROM agent_status WHERE agent_name = ?", (agent_id,)
+    )
+    return agent_id if rows else None
+
+
+# ── Commands ────────────────────────────────────────────────────────────────
 
 async def start_command(update: Update, context: Any) -> None:
     if not is_authorized(update.effective_chat.id):
@@ -162,6 +212,9 @@ async def start_command(update: Update, context: Any) -> None:
         "/templates — Available templates\n"
         "/launch <template_id> — Launch a template\n"
         "/workspaces — Active workspaces\n"
+        "/workspace <workspace_id> — Workspace detail\n"
+        "/task <workspace_id> <mission> — Create and run a task\n"
+        "/approvals — Pending approval queue\n"
         "/rollup — Trigger morning rollup\n"
         "/spawn <agent> — Wake an agent manually"
     )
@@ -174,16 +227,11 @@ async def agents_command(update: Update, context: Any) -> None:
     workspace_id = context.args[0] if getattr(context, "args", None) else None
     agent_rows = _list_agent_rows(workspace_id)
     if not agent_rows:
-        if workspace_id:
-            await update.message.reply_text(f"No agents found for workspace `{workspace_id}`.", parse_mode="Markdown")
-        else:
-            await update.message.reply_text("No agents found.")
+        msg = f"No agents found for workspace `{workspace_id}`." if workspace_id else "No agents found."
+        await update.message.reply_text(msg, parse_mode="Markdown")
         return
 
-    heading = "🤖 *Agents*\n"
-    if workspace_id:
-        heading = f"🤖 *Agents* `{workspace_id}`\n"
-
+    heading = f"🤖 *Agents* `{workspace_id}`\n" if workspace_id else "🤖 *Agents*\n"
     lines = [heading]
     for row in agent_rows:
         agent_id = row["agent_name"]
@@ -244,20 +292,18 @@ async def launch_command(update: Update, context: Any) -> None:
         "🚀 *Template Launched*",
         "",
         f"Template: *{result.get('template_name', template_id)}*",
-        f"Workspace: `{result.get('workspace_id', 'global')}`",
-        f"Agents created: {', '.join(result.get('agents_created', [])) or 'none'}",
+        f"Workspace: `{result.get('workspace_id', 'n/a')}`",
+        f"Agents created: {', '.join(result.get('agents_created', [])) or 'none (already running)'}",
         f"Permissions applied: {result.get('permissions_applied', 0)}",
         f"Budgets applied: {result.get('budgets_applied', 0)}",
     ]
 
     keyboard_rows = []
     for agent_id in result.get("agents_created", []):
-        keyboard_rows.append(
-            [
-                InlineKeyboardButton(f"View Status: {agent_id}", callback_data=f"view_status:{agent_id}"),
-                InlineKeyboardButton(f"Pause: {agent_id}", callback_data=f"pause_agent:{agent_id}"),
-            ]
-        )
+        keyboard_rows.append([
+            InlineKeyboardButton(f"Status: {agent_id}", callback_data=f"view_status:{agent_id}"),
+            InlineKeyboardButton(f"Pause", callback_data=f"pause_agent:{agent_id}"),
+        ])
 
     reply_markup = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
     await update.message.reply_text(
@@ -271,7 +317,9 @@ async def workspaces_command(update: Update, context: Any) -> None:
     if not is_authorized(update.effective_chat.id):
         return
 
-    workspaces = kernel.list_workspaces()
+    all_workspaces = kernel.list_workspaces()
+    # Filter out deleted workspaces
+    workspaces = [w for w in all_workspaces if w.get("status") != "deleted"]
     if not workspaces:
         await update.message.reply_text("No active workspaces.")
         return
@@ -279,13 +327,223 @@ async def workspaces_command(update: Update, context: Any) -> None:
     lines = ["🗂️ *Workspaces*\n"]
     for workspace in workspaces:
         ws_detail = kernel.get_workspace(workspace["id"])
-        active = sum(1 for agent in ws_detail.get("agents", []) if agent["status"] == "active")
+        active = sum(1 for a in ws_detail.get("agents", []) if a["status"] == "active")
         lines.append(
             f"*{workspace['id']}* — {workspace.get('name', workspace['id'])}\n"
             f"    Template: {workspace.get('template_id', 'unknown')} | Status: {workspace.get('status', 'unknown')}\n"
             f"    Agents: {workspace.get('agent_count', 0)} | Active: {active}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def workspace_command(update: Update, context: Any) -> None:
+    """Show a detailed summary for a single workspace."""
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /workspace <workspace_id>")
+        return
+
+    workspace_id = args[0]
+    try:
+        ws = kernel.get_workspace(workspace_id)
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return
+
+    # Template name
+    try:
+        manifest = kernel.get_template(ws["template_id"])
+        template_name = manifest.get("name", ws["template_id"])
+    except FileNotFoundError:
+        template_name = ws["template_id"]
+
+    # Agents
+    agents = ws.get("agents", [])
+    agent_lines = []
+    for a in agents:
+        agent_lines.append(
+            f"  {_icon_for_status(a['status'])} {a['agent_name']} — {a['status']}"
+        )
+
+    # Recent tasks assigned to workspace agents
+    agent_names = [a["agent_name"] for a in agents]
+    recent_tasks: list[dict[str, Any]] = []
+    if agent_names:
+        placeholders = ",".join("?" for _ in agent_names)
+        recent_tasks = kernel._fetch_all(
+            f"""
+            SELECT title, status, assigned_to
+            FROM tasks
+            WHERE assigned_to IN ({placeholders})
+            ORDER BY created_at DESC
+            LIMIT 5
+            """,
+            agent_names,
+        )
+
+    task_lines = []
+    for t in recent_tasks:
+        task_lines.append(
+            f"  {_icon_for_status(t['status'])} {t['title']} → {t.get('assigned_to', 'n/a')}"
+        )
+
+    # Pending approvals count
+    approval_queue = kernel.get_approval_queue(workspace_id=workspace_id)
+    pending_count = len(approval_queue)
+
+    lines = [
+        f"🗂️ *Workspace* `{workspace_id}`",
+        f"Template: *{template_name}*",
+        f"Status: {ws.get('status', 'unknown')}",
+        f"Created: {ws.get('created_at', 'n/a')}",
+        "",
+        f"*Agents* ({len(agents)})",
+    ]
+    lines.extend(agent_lines or ["  none"])
+    lines += ["", f"*Recent Tasks* (last {len(recent_tasks)})"]
+    lines.extend(task_lines or ["  none"])
+    lines += ["", f"*Pending Approvals:* {pending_count}"]
+
+    keyboard = []
+    if pending_count:
+        keyboard.append([InlineKeyboardButton(
+            f"View {pending_count} approvals", callback_data=f"show_approvals:{workspace_id}"
+        )])
+
+    reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=reply_markup,
+    )
+
+
+async def task_command(update: Update, context: Any) -> None:
+    """
+    /task <workspace_id> <mission text>
+
+    Creates a task in the workspace and spawns the first-pipeline-stage agent.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    args = context.args
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /task <workspace_id> <mission>\n"
+            "Example: /task ws-abc123 Analyze the PE deal landscape"
+        )
+        return
+
+    workspace_id = args[0]
+    mission = " ".join(args[1:])
+
+    # Validate workspace
+    try:
+        ws = kernel.get_workspace(workspace_id)
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    if ws.get("status") == "deleted":
+        await update.message.reply_text(f"Workspace `{workspace_id}` has been deleted.", parse_mode="Markdown")
+        return
+
+    # Find a goal to attach the task to
+    goal_id = _get_or_ensure_inbox_goal()
+    if not goal_id:
+        await update.message.reply_text(
+            "No active goals found. Create a goal first:\n"
+            "Use the DB directly or seed the database."
+        )
+        return
+
+    # Create the task
+    try:
+        task_id = kernel.create_task({
+            "goal_id": goal_id,
+            "title": mission,
+            "description": f"Workspace: {workspace_id}\nIssued via Telegram.",
+            "status": "backlog",
+        })
+    except Exception as exc:
+        await update.message.reply_text(f"Failed to create task: {exc}")
+        return
+
+    # Determine starting agent from template pipeline
+    agent_id = _resolve_start_agent(workspace_id, ws["template_id"])
+    if not agent_id:
+        await update.message.reply_text(
+            f"Task `{task_id}` created but could not resolve a starting agent "
+            f"for template `{ws['template_id']}`.\n"
+            f"Use /spawn to run an agent manually.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Assign and spawn
+    try:
+        kernel.assign_task(task_id, agent_id)
+    except Exception as exc:
+        await update.message.reply_text(f"Task created (`{task_id}`) but assignment failed: {exc}")
+        return
+
+    await update.message.reply_text(
+        f"📋 Task created: `{task_id}`\n"
+        f"Mission: {mission}\n"
+        f"Agent: `{agent_id}`\n\n"
+        "🚀 Spawning agent...",
+        parse_mode="Markdown",
+    )
+
+    try:
+        response = kernel.spawn_agent(agent_id, task_id)
+    except Exception as exc:
+        await update.message.reply_text(f"Agent spawn failed: {exc}")
+        return
+
+    await update.message.reply_text(_truncate(_format_spawn_result(response)))
+
+
+async def approvals_command(update: Update, context: Any) -> None:
+    """Show the pending approval queue with Approve/Reject inline buttons."""
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    queue = kernel.get_approval_queue()
+    if not queue:
+        await update.message.reply_text("✅ No items pending approval.")
+        return
+
+    await update.message.reply_text(f"📥 *Approval Queue* — {len(queue)} item(s)", parse_mode="Markdown")
+
+    for item in queue[:10]:  # cap at 10 to avoid spam
+        review_id = item["review_id"]
+        agent = item.get("agent_name", "unknown")
+        title = item.get("title") or item.get("task_id") or "untitled"
+        stakes = item.get("stakes", "low").upper()
+        feedback = item.get("feedback") or ""
+        ws = item.get("workspace_id") or "global"
+
+        stakes_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴"}.get(stakes, "⬜")
+
+        text = (
+            f"{stakes_icon} *{title}*\n"
+            f"Agent: {agent} | Workspace: {ws}\n"
+            f"Stakes: {stakes}"
+        )
+        if feedback:
+            text += f"\nCritic note: {feedback[:200]}"
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
+        ]])
+
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
 async def goals_command(update: Update, context: Any) -> None:
@@ -296,17 +554,14 @@ async def goals_command(update: Update, context: Any) -> None:
     lines = ["🎯 *Active Goals*\n"]
     for goal in goals:
         projects = kernel._fetch_all(
-            """
-            SELECT name, pipeline_stage
-            FROM projects
-            WHERE goal_id = ? AND status = 'active'
-            ORDER BY created_at DESC
-            """,
+            "SELECT name, pipeline_stage FROM projects WHERE goal_id = ? AND status = 'active' ORDER BY created_at DESC",
             (goal["id"],),
         )
         lines.append(f"• *{goal['name']}*")
         for project in projects:
             lines.append(f"    └ {project['name']} ({project['pipeline_stage']})")
+    if len(lines) == 1:
+        lines.append("No active goals.")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -314,7 +569,7 @@ async def tasks_command(update: Update, context: Any) -> None:
     if not is_authorized(update.effective_chat.id):
         return
 
-    tasks = [task for task in kernel.get_task_queue() if task["status"] not in ("done", "cancelled")][:15]
+    tasks = [t for t in kernel.get_task_queue() if t["status"] not in ("done", "cancelled")][:15]
     if not tasks:
         await update.message.reply_text("No pending tasks.")
         return
@@ -373,7 +628,7 @@ async def handle_message(update: Update, context: Any) -> None:
 
 
 async def handle_callback(update: Update, context: Any) -> None:
-    """Handle inline button presses (Approve/Reject/Discuss etc.)."""
+    """Handle inline button presses."""
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -384,17 +639,41 @@ async def handle_callback(update: Update, context: Any) -> None:
 
     action, value = parts
 
-    if action == "approve":
-        await query.edit_message_text(f"Approval by task id is no longer wired here: {value}")
+    if action == "approve_review":
+        try:
+            kernel.approve_action(int(value))
+            await query.edit_message_text(f"✅ Approved review #{value}")
+        except Exception as exc:
+            await query.message.reply_text(f"Approval failed: {exc}")
         return
 
-    if action == "reject":
-        await query.edit_message_text(f"Reject by task id is no longer wired here: {value}")
+    if action == "reject_review":
+        try:
+            kernel.reject_action(int(value), "Rejected via Telegram")
+            await query.edit_message_text(f"❌ Rejected review #{value}")
+        except Exception as exc:
+            await query.message.reply_text(f"Rejection failed: {exc}")
         return
 
     if action == "investigate":
         kernel.send_message("abdul", "analyst", "Investigate this signal further", "directive")
         await query.edit_message_text(f"🔍 Investigating: {value} — routed to Analyst")
+        return
+
+    if action == "show_approvals":
+        queue = kernel.get_approval_queue(workspace_id=value)
+        if not queue:
+            await query.message.reply_text(f"No pending approvals for `{value}`.", parse_mode="Markdown")
+            return
+        for item in queue[:5]:
+            review_id = item["review_id"]
+            title = item.get("title") or item.get("task_id") or "untitled"
+            text = f"📥 *{title}* — stakes: {item.get('stakes', 'low').upper()}"
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
+            ]])
+            await query.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
         return
 
     if action == "view_status":
@@ -407,6 +686,7 @@ async def handle_callback(update: Update, context: Any) -> None:
             f"🤖 *{value}*\n"
             f"Status: {status['status']}\n"
             f"Model: {status.get('model_active') or 'unknown'}\n"
+            f"Workspace: {status.get('workspace_id') or 'global'}\n"
             f"Last active: {status.get('last_heartbeat') or 'never'}\n"
             f"Open tasks: {status.get('task_count', 0)}"
         )
@@ -450,6 +730,9 @@ def main() -> None:
     app.add_handler(CommandHandler("templates", templates_command))
     app.add_handler(CommandHandler("launch", launch_command))
     app.add_handler(CommandHandler("workspaces", workspaces_command))
+    app.add_handler(CommandHandler("workspace", workspace_command))
+    app.add_handler(CommandHandler("task", task_command))
+    app.add_handler(CommandHandler("approvals", approvals_command))
     app.add_handler(CommandHandler("rollup", rollup_command))
     app.add_handler(CommandHandler("spawn", spawn_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
