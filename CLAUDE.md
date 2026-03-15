@@ -1,80 +1,99 @@
 # APEX — Agent Operating System
 
 ## What This Is
-APEX is an Agent Operating System — a platform where anyone can create, configure, and operate AI agents through a simple interface. This repo contains the kernel (runtime engine) and the first template (Startup Chief of Staff).
+APEX is an Agent Operating System — a platform where anyone can create, configure, and operate AI agents through a simple interface. This repo contains the kernel (runtime engine), two launchable templates, and a Telegram adapter.
 
 ## Architecture Overview
 The system has four layers:
-1. **Kernel** (`/kernel/`) — agent lifecycle, task management, messaging, reviews, model routing, spawn protocol
+1. **Kernel** (`/kernel/`) — agent lifecycle, task management, messaging, reviews, model routing, spawn protocol, evidence storage, memory, tool adapters
 2. **Templates** (`/templates/`) — packaged agent team configs for specific use cases
-3. **Adapters** (`/adapters/`) — interface connectors (Telegram, Slack, web, etc.)
-4. **UI** (`/ui/`) — product frontend (onboarding wizard, dashboard, approval queue)
+3. **Adapters** (`/adapters/`) — interface connectors (Telegram currently, Slack/web planned)
+4. **UI** (`/ui/`) — product frontend (stub — thin dashboard planned after workflow and trust-loop polish)
 
-Currently everything lives flat in the repo from the initial build. The next refactor will organize into this structure.
-
-## Repo Structure
+## Current Repo Structure
 ```
 ~/apex-studio/
-├── kernel/                     # Runtime engine
-│   ├── spawn-agent.sh          # Core spawn protocol (context injection → model call → parse → persist)
+├── kernel/
+│   ├── api.py                  # ApexKernel class — stable API boundary for all runtime operations
+│   ├── __init__.py             # Exports ApexKernel
+│   ├── spawn-agent.sh          # Core spawn protocol (context injection → search → model call → parse → persist)
 │   ├── call_model.py           # Ollama and Claude API caller (reads prompts from temp files)
 │   ├── parse_response.py       # JSON parser with text fallback, message allowlist, status normalization
-│   ├── run_critic.py           # Critic pipeline (reads review queue, scores, verdicts)
+│   ├── run_critic.py           # Critic pipeline (reads review queue, scores, verdicts, evidence verification)
+│   ├── evidence.py             # EvidenceStore — stores and retrieves search evidence per task
+│   ├── critic_evidence.py      # Citation verification — checks agent URLs against stored evidence
+│   ├── memory.py               # SessionMemory, WorkingMemory, DurableMemory abstractions
+│   ├── memory_loader.py        # CLI helper for spawn-agent.sh to load/save memory
+│   ├── tool_adapter.py         # Tool registry — maps tool names to adapter functions
 │   ├── heartbeat.sh            # Cron wrapper for scheduled agent wakeups
-│   ├── trigger_critic.sh       # CLI wrapper for running Critic
-│   └── crontab                 # Heartbeat schedule (installed via `crontab kernel/crontab`)
+│   ├── crontab                 # Heartbeat schedule
+│   └── trigger_critic.sh       # CLI wrapper for running Critic
 ├── templates/
-│   └── startup-chief-of-staff/
-│       ├── agents/             # Agent configs (5 agents: apex, scout, analyst, builder, critic)
-│       │   └── <agent>/
-│       │       ├── agent.json          # Model routing, heartbeat, capabilities
-│       │       ├── AGENTS.md           # Identity and job description
-│       │       ├── constraints/        # hard-rules.md, soft-preferences.md, anti-patterns.md
-│       │       └── workspace/          # scratchpad.md
-│       └── workspace/
-│           ├── AGENTS.md               # System-wide operating rules
-│           ├── SOUL.md                 # Personality and voice
-│           ├── USER.md                 # Abdul's operator profile
-│           ├── MEMORY.md               # Shared long-term memory (Apex writes)
-│           └── HEARTBEAT.md            # Schedule reference
+│   ├── startup-chief-of-staff/
+│   │   ├── template.json       # 5-agent manifest with pipeline, permissions, heartbeats
+│   │   ├── README.md
+│   │   ├── agents/             # apex, scout, analyst, builder, critic
+│   │   │   └── <agent>/
+│   │   │       ├── agent.json
+│   │   │       ├── AGENTS.md
+│   │   │       ├── constraints/ (hard-rules.md, soft-preferences.md, anti-patterns.md)
+│   │   │       └── workspace/scratchpad.md
+│   │   └── workspace/
+│   │       ├── AGENTS.md, SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md
+│   │       └── memory/
+│   └── research-assistant/
+│       ├── template.json       # 3-agent manifest (scout, analyst, critic)
+│       ├── README.md
+│       └── agents/             # scout, analyst, critic (research-focused rules)
 ├── adapters/
 │   └── telegram/
-│       ├── telegram_bot.py     # Bidirectional Telegram interface
+│       ├── telegram_bot.py     # /start /status /goals /tasks /templates /launch /task /workspaces /agents /approvals /spawn
 │       └── send_telegram.py    # Outbound message CLI
 ├── tests/
-│   ├── test_spawn.sh           # Spawn protocol test
-│   ├── test_parser.sh          # Parser unit tests
-│   ├── test_json_output.sh     # JSON output integration test
-│   ├── test_grounding.sh       # Scout + Analyst grounding tests
-│   └── test_critic.sh          # Full Critic pipeline test
-├── ui/                         # Product frontend (stub)
-├── docs/                       # Architecture docs
+│   ├── test_parser.sh          # Parser unit tests (4 cases)
+│   ├── test_json_output.sh     # JSON output integration test + live agent
+│   ├── test_grounding.sh       # Scout + Analyst grounding verification
+│   ├── test_critic.sh          # Full Critic pipeline test
+│   ├── test_primitives.sh      # Tool, Permission, Budget primitives (28 tests)
+│   ├── test_launch_template.sh # Template launch + workspace scoping (22 tests)
+│   ├── test_memory.sh          # Memory abstraction tests
+│   ├── test_web_search.sh      # Live DuckDuckGo search test
+│   ├── test_evidence.sh        # Evidence store tests
+│   ├── test_critic_evidence.sh # Citation verification unit tests
+│   └── test_critic_evidence_integration.sh  # Critic + evidence override integration
 ├── db/
-│   ├── apex_state.db           # SQLite: 8 tables (goals, projects, tasks, agent_messages, agent_status, agent_sessions, reviews, evals)
-│   ├── schema.sql              # Table definitions with indexes
-│   └── seed.sql                # Initial goals, projects, agent status
+│   ├── apex_state.db           # SQLite: 15 tables
+│   ├── schema.sql              # Full schema with indexes
+│   ├── seed.sql                # Initial goals, projects, agent status
+│   └── seed_tools.sql          # Web search tool registration
+├── docs/                       # Architecture docs
+├── ui/                         # Stub — dashboard MVP planned
 ├── .env                        # API keys and config (not committed)
 ├── .env.example                # Template for .env
+├── CLAUDE.md                   # This file
+├── ARCHITECTURE.md             # Product architecture document
 └── .gitignore
 ```
 
 ## Key Technical Decisions
 
 ### Models
-- **Local**: `qwen3.5-apex` — custom Ollama model with thinking disabled (`--think=false`). Based on `qwen3.5:4b`.
+- **Local**: `qwen3.5-apex` — custom Ollama model with thinking disabled. Based on `qwen3.5:4b`.
 - **API**: Claude Opus for Apex orchestrator and Critic deep reviews. Claude Sonnet as fallback. Currently no API key set — everything falls back to local.
-- **All Ollama API calls MUST include `"think": false`** — without this, Qwen 3.5 outputs verbose chain-of-thought that wastes tokens and time.
+- **All Ollama API calls MUST include `"think": false`** — without this, Qwen 3.5 outputs verbose chain-of-thought.
 
 ### Spawn Protocol
-Every agent wakeup goes through `spawn-agent.sh`:
-1. Update agent status to active
-2. Build system prompt (agent identity + hard rules + JSON response schema)
-3. Build user prompt (inbox + task context)
-4. Write prompts to temp files
-5. Call `call_model.py` with model name + temp file paths
-6. Parse response through `parse_response.py` (tries JSON first, falls back to text)
-7. Process: save session, append scratchpad, send messages, update task status
-8. Update agent status to idle
+Every agent wakeup goes through `kernel/spawn-agent.sh`:
+1. Resolve agent config path (supports both global and workspace-scoped agents via meta.config_path)
+2. Update agent status to active
+3. Build system prompt (agent identity + hard rules + JSON response schema + search grounding rule)
+4. Build user prompt (inbox + task context)
+5. If agent has web_search tool grant: generate 3 focused queries via Qwen, run all through DuckDuckGo, deduplicate by URL, store via EvidenceStore, inject as `## Search Evidence`
+6. Write prompts to temp files
+7. Call `call_model.py` with model name + temp file paths
+8. Parse response through `parse_response.py` (tries JSON first, falls back to text)
+9. Process: save session via memory_loader.py, send messages, update task status
+10. Update agent status to idle
 
 ### Response Format
 Agents respond in JSON:
@@ -85,66 +104,71 @@ Agents respond in JSON:
   "proposed_output": "deliverable (labeled as proposed if not executed)",
   "messages": [{"to": "agent_name", "type": "request", "content": "..."}],
   "scratchpad_update": "key facts to remember",
-  "status": "done|blocked:reason|needs_review:low|medium|high"
+  "status": "done|blocked:reason|needs_review:low|needs_review:medium|needs_review:high"
 }
 ```
 
+### Workspace Scoping
+- Templates launch into isolated workspaces: `kernel.launch_template("research-assistant")` creates workspace `ws-abc123`
+- Agents are namespaced: `ws-abc123-scout`, `ws-abc123-analyst`, `ws-abc123-critic`
+- All DB tables include `workspace_id` column for filtering
+- Zero collisions when multiple templates share role names
+- Backward compatible: `workspace_id="global"` preserves legacy behavior
+- `_resolve_agent_config_path()` handles workspace-scoped agents by reading meta.config_path
+
 ### Grounding Rules
-All agents have anti-hallucination rules:
 - Only claim actions actually performed in the session
 - Never invent URLs, statistics, or data
-- Scout and Analyst explicitly know they have NO search tools in Phase 1.5
-- If data is unavailable, agents say so instead of fabricating
+- If Search Evidence is present, cite only from provided evidence
+- If Search Evidence is absent or empty, do not invent sources — state what evidence you lack
 
-### Message Allowlist
-Valid message targets: `apex`, `scout`, `analyst`, `builder`, `critic`. Messages to invalid targets are rerouted to `apex` as escalations.
+### Critic Pipeline + Evidence Verification
+- 6-dimension rubric scoring (accuracy, completeness, actionability, conciseness, hard rule compliance, grounding)
+- PASS / REVISE / BLOCK verdicts
+- **Automated evidence verification**: after Critic scores, `verify_agent_output()` checks all cited URLs against stored evidence
+- **Trust override**: if grounding_score < 0.5 and Critic said PASS, automatically overrides to REVISE
+- Evidence verification results stored in review feedback JSON
+- Per-dimension eval logging including `evidence_grounding` dimension
 
-### Critic Pipeline
-`run_critic.py` processes the review queue:
-- Reads pending reviews from DB
-- Calls Critic model with a 6-dimension rubric (accuracy, completeness, actionability, conciseness, hard rule compliance, grounding)
-- Returns PASS (≥3.5, no violations) / REVISE (feedback sent to agent) / BLOCK (escalated to apex)
-- Logs eval scores per dimension for trend tracking
+### Search Integration
+- DuckDuckGo HTML search via `adapters/tools/web_search.py` (no API key needed)
+- Multi-query: spawn script generates 3 focused queries via Qwen, runs all, deduplicates by URL (~12 results vs 5 with single query)
+- Evidence stored in `evidence` table via `kernel/evidence.py`
+- Template-level auto-grants: `launch_template()` automatically grants web_search to scout and analyst when listed in template integrations
+
+### Template System
+- `launch_template(template_id, overrides)` → creates workspace, registers agents, applies permissions, budgets, and tool grants
+- Templates may define default permissions, budgets, and tool grants that are applied automatically at launch
+- Self-contained packages in `/templates/<id>/`
+- `list_templates()`, `get_template(id)`, `launch_template(id, overrides)`
 
 ## Database Schema
-8 tables in `db/apex_state.db`:
-- `goals` — top-level objectives
-- `projects` — under goals, with pipeline stage
-- `tasks` — atomic work units with checkout locking
-- `agent_messages` — inter-agent communication bus
-- `agent_status` — current state per agent
+15 tables in `db/apex_state.db`:
+- `goals`, `projects` — goal/project hierarchy
+- `tasks` — atomic work units with checkout locking + workspace_id
+- `agent_messages` — inter-agent communication bus + workspace_id
+- `agent_status` — current state per agent + workspace_id
 - `agent_sessions` — persisted execution context
-- `reviews` — Critic review queue
-- `evals` — per-dimension quality scores
-
-## Running Tests
-```bash
-# Source environment first
-export $(grep -v '^#' .env | xargs)
-
-# Parser unit tests (instant)
-./tests/test_parser.sh
-
-# Spawn test with JSON output (~1-2 min on CPU)
-./tests/test_json_output.sh
-
-# Grounding tests for Scout + Analyst (~3-4 min)
-./tests/test_grounding.sh
-
-# Full Critic pipeline test (~3-4 min)
-./tests/test_critic.sh
-```
+- `reviews` — Critic review queue + workspace_id
+- `evals` — per-dimension quality scores + workspace_id
+- `tools` — tool registry
+- `tool_grants` — per-agent tool access + workspace_id
+- `permissions` — per-agent access controls + workspace_id
+- `budgets` — per-agent budget envelopes + workspace_id
+- `spend_log` — immutable spend audit trail
+- `evidence` — stored search results for citation verification
+- `workspaces` — workspace registry
 
 ## Running the Telegram Bot
 ```bash
+cd ~/apex-studio
 export $(grep -v '^#' .env | xargs)
-python3 adapters/telegram/telegram_bot.py
+PYTHONPATH=. python3 adapters/telegram/telegram_bot.py
 ```
-Commands: `/start`, `/status`, `/goals`, `/tasks`, `/rollup`, `/spawn <agent>`
 
 ## Environment Variables
 ```
-ANTHROPIC_API_KEY=    # Optional — system falls back to local model
+ANTHROPIC_API_KEY=    # Optional — falls back to local model
 TELEGRAM_BOT_TOKEN=   # From @BotFather
 TELEGRAM_CHAT_ID=     # Your numeric Telegram ID
 OLLAMA_URL=http://localhost:11434
@@ -156,100 +180,50 @@ APEX_HOME=/Users/abdulmanan/apex-studio
 - **Prod** (upcoming): RTX 5090 desktop for Qwen 3.5 27B + Perplexica
 
 ## Do Not Change (Guardrails for Coding Agents)
-These must remain stable during all refactoring and new development:
-- **All existing tests must keep passing** — run test_parser.sh, test_json_output.sh, test_grounding.sh, test_critic.sh after every change
-- **Preserve Telegram bot behavior** — commands, free-text routing, and agent spawning must work identically
-- **Preserve JSON response parsing + text fallback** — parse_response.py behavior is stable
-- **Preserve grounding rules** — all anti-hallucination constraints in hard-rules.md files must survive any file moves
-- **SQLite remains the source of truth** — do not introduce a new database or ORM in this phase
-- **Do not build the dashboard before kernel boundary work is complete** — Phase A and B before Phase D
-- **Do not re-implement existing working functionality from scratch** — wrap it, don't rewrite it
-- **All Ollama API calls must include `"think": false`** — this is non-negotiable
+- **All existing tests must keep passing** — run all test scripts after every change
+- **Preserve Telegram bot behavior** — all commands must work identically
+- **Preserve JSON response parsing + text fallback** — parse_response.py is stable
+- **Preserve grounding rules** — all anti-hallucination constraints must survive
+- **SQLite remains the source of truth** — no new databases in this phase
+- **Do not rewrite working code from scratch** — wrap it, don't rewrite it
+- **All Ollama API calls must include `"think": false`**
+- **Evidence verification override in Critic must not be disabled** — grounding_score < 0.5 overrides PASS to REVISE
+- **Template tool grants must remain automatic** — launch_template() handles web_search grants
+
+## Known Rough Edges
+- Telegram is currently the only operator interface
+- DuckDuckGo HTML search is a temporary backend — brittle parsing, sometimes blocked
+- Some kernel methods still carry legacy/global compatibility behavior
+- Templates define default permissions, budgets, and tool grants applied at launch — but some edge cases may remain
+- Dev hardware (Intel Mac, CPU-only) limits inference speed and model size
 
 ## What Needs Building Next (Priority Order)
 
-### Phase A: Kernel Boundary (DO THIS FIRST)
-1. **Repo restructure** — move files into this target layout:
-   ```
-   /kernel/          — all runtime primitives (spawn, parse, model call, critic, message bus)
-   /kernel/api.py    — Python class with kernel API methods
-   /kernel/db.py     — database operations
-   /kernel/models.py — model routing and calling
-   /templates/       — packaged agent team configs
-   /templates/startup-chief-of-staff/  — first template (extracted from current agents/)
-   /adapters/        — interface connectors
-   /adapters/telegram/  — current telegram_bot.py + send_telegram.py
-   /ui/              — product frontend (stub for now)
-   /tests/           — all test scripts
-   /docs/            — architecture docs
-   ```
-   All existing functionality must keep working after the move. Run all tests to verify.
+### Immediate (optimized for Intel Mac — no heavy infra)
+1. **Telegram workflow polish** — cleaner task status messages, better task routing (multi-agent chain), workspace summaries, evidence visibility in responses, approval UX polish, better error messages. Make the phone-based loop feel excellent.
+2. **Template launch polish** — make launch fully declarative: default tool grants, permissions, budgets, heartbeats, search roles all from config. Goal: `launch_template()` requires zero follow-up setup.
+3. **Trust loop + evidence UX** — evidence-backed Critic enforcement is built but not visible to operator. Add `/evidence <task_id>` Telegram command, evidence preview in approval cards, clearer blocked/insufficient-evidence statuses.
+4. **More templates** — Content Engine (scout + writer + critic + scheduler), Sales Ops (scout + writer + operator + critic). Proves generality beyond research. Low hardware dependence.
+5. **Thin dashboard MVP** — template launcher, workspaces list, agent status, approvals, recent tasks. Call kernel/api.py — no direct DB access. Keep it minimal.
 
-   **Acceptance criteria for Phase A:**
-   - All 4 test scripts pass after the restructure (parser, json output, grounding, critic)
-   - Telegram bot starts and responds to /status, /goals, /tasks, /spawn
-   - `spawn-agent.sh` still works from its new location with correct path resolution
-   - No behavior regressions in spawn, parse, critic, or messaging flows
-   - `kernel/api.py` wraps existing shell scripts and Python modules — it does NOT rewrite them from scratch
-   - Agent configs in `/templates/startup-chief-of-staff/` are identical to current `agents/` content
-   - `.env` and `db/apex_state.db` paths still resolve correctly
+### Phase 3: Product Readiness (after 5090 arrives)
+6. **Perplexica integration** — Replace DuckDuckGo with Perplexica for much better search quality. Docker setup on 5090. Point APEX at remote Ollama + Perplexica backend.
+7. **Anthropic API key** — Opus for Apex routing and Critic high-stakes reviews. Qwen for everything else.
+8. **Stronger local models** — Qwen 3.5 27B on 5090 for dramatically better agent output quality.
+9. Multi-tenancy — user accounts, isolated workspaces per user, auth
+10. Web onboarding wizard — 6-step flow from ARCHITECTURE.md
 
-2. **Kernel API class** (`/kernel/api.py`) — Python class wrapping current shell scripts and DB operations:
-   - `create_agent(config: dict) -> str` — create agent from config, return agent_id
-   - `pause_agent(agent_id: str)` / `resume_agent(agent_id: str)`
-   - `get_agent_status(agent_id: str) -> dict`
-   - `create_task(task: dict) -> str` — create task with goal ancestry
-   - `assign_task(task_id: str, agent_id: str)` — with atomic checkout
-   - `spawn_agent(agent_id: str, task_id: str = None) -> dict` — full spawn cycle, return parsed response
-   - `submit_for_review(task_id: str, stakes: str)` — queue for Critic
-   - `run_critic_pipeline() -> list` — process all pending reviews
-   - `get_approval_queue() -> list` — items waiting for human decision
-   - `approve_action(review_id: int)` / `reject_action(review_id: int, feedback: str)`
-   - `send_message(from_agent: str, to_agent: str, content: str, msg_type: str)`
-   - `route_user_message(text: str) -> dict` — route through Apex
-   - `get_eval_history(agent_id: str) -> list` — quality scores over time
-   This class is the stable boundary between kernel and everything else (UI, adapters, templates).
-
-### Phase B: Missing Primitives
-3. **Tool primitive** — a registry table + Python interface:
-   - Schema: `tools(id, name, adapter, auth_method, scopes, read_write, cost_per_call, approval_required)`
-   - `register_tool(config)`, `grant_tool_access(agent_id, tool_id, permission_level)`, `invoke_tool(agent_id, tool_id, params)`
-   - Permission levels: read_only, draft, write_with_approval, full_write
-
-4. **Permission primitive** — explicit per-agent access controls:
-   - Schema: `permissions(id, agent_id, tool_id, level, max_spend_per_day, requires_approval, created_at)`
-   - Replaces implicit hard-rules.md for tool access
-   - Checked at runtime before any tool invocation
-
-5. **Budget tracking** — token and dollar tracking:
-   - Schema: `budgets(id, agent_id, budget_type, limit_amount, spent_amount, period, alert_threshold)`
-   - Track per-agent: API tokens used, API dollars spent, tool invocation costs
-   - Alert when approaching limit, hard-stop when exceeded
-
-6. **Memory abstraction** — define interfaces, keep SQLite backing for now:
-   - `session_memory` — current conversation context (already exists as agent_sessions)
-   - `working_memory` — scratchpad facts for current task (already exists as scratchpad.md)
-   - `durable_memory` — long-term facts that persist across sessions (already exists as MEMORY.md)
-   - Define read/write methods that agents call. Later swap backing store without changing agent code.
-
-### Phase C: Template System
-7. **Extract "Startup Chief of Staff" template** — package current agents/ into a launchable config:
-   - `template.json` with metadata, agent list, default permissions, heartbeat schedule
-   - Must be launchable via `kernel.launch_template("startup-chief-of-staff")` — no manual file creation
-   - All 5 current agents become part of this template
-
-8. **Create "Research Assistant" template** — prove generality:
-   - 3 agents: Scout, Analyst, Critic
-   - Different rules, different heartbeat schedule
-   - Must launch from config alone with zero code changes to the kernel
-
-### Phase D: Product UI (AFTER kernel is stable)
-9. **Dashboard MVP** — approval queue, activity feed, agent status, stats
-10. **Onboarding wizard** — 6-step flow from the product architecture doc
+### Phase 4: Platform & Ecosystem
+11. **Skills ecosystem compatibility** — Make templates exportable as skill packages for skills.sh CLI. Agent constraint files should be SKILL.md compatible for interoperability with Claude Code, Cursor, Codex.
+12. **Skill graphs** — Interconnected knowledge graphs using wikilinks and progressive disclosure for deep vertical templates. Each domain (PE research, legal, trading) gets a traversable graph of specialized knowledge that agents load on demand.
+13. Template marketplace — community templates with ratings
+14. Billing — Stripe, usage-based pricing, budget enforcement per user
 
 ## Code Style
 - Shell scripts: `set -e`, functions for reuse, `log()` for consistent output
-- Python: stdlib preferred (no heavy frameworks), type hints encouraged
-- SQL: parameterized queries when possible, `INSERT OR IGNORE` for idempotency
-- All agent-facing prompts should request JSON output
-- All model calls must include `"think": false` for Ollama
+- Python: stdlib preferred, type hints encouraged
+- SQL: parameterized queries, `INSERT OR IGNORE` for idempotency
+- All agent prompts request JSON output
+- All Ollama calls include `"think": false`
+- New files for parallel work — modify existing files only in sequential tasks
+- Run all tests after every change
