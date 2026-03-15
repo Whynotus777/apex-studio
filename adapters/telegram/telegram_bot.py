@@ -896,6 +896,185 @@ async def evidence_command(update: Update, context: Any) -> None:
     await _safe_reply(update.message, _truncate("\n\n".join(chunks), 4000))
 
 
+async def _run_content_engine_chain(
+    message: Any,
+    loop: Any,
+    workspace_id: str,
+    scout_agent: str,
+    scout_task_id: str,
+    mission: str,
+    goal_id: str | None,
+    chain_log: list[dict[str, Any]],
+) -> None:
+    """
+    Hardcoded Scout → Writer → Critic chain for content-engine workspaces.
+    Scout runs on scout_task_id. Writer gets its own task (inherits evidence
+    via workspace prefix). Critic runs via pipeline on the writer task.
+    """
+    # ── Step 1: Scout ──────────────────────────────────────────────────────
+    print(f"[DEBUG] CE chain: spawning scout={scout_agent} task={scout_task_id}", flush=True)
+    try:
+        scout_resp = await loop.run_in_executor(None, kernel.spawn_agent, scout_agent, scout_task_id)
+    except Exception as exc:
+        print(f"[DEBUG] scout spawn failed: {exc}", flush=True)
+        await _safe_reply(message, f"⚠️ Scout failed: {exc}")
+        return
+
+    scout_action = _infer_scout_action(scout_resp, scout_task_id)
+    print(f"[DEBUG] scout done: status={scout_resp.get('status')} action={scout_action!r}", flush=True)
+    chain_log.append({"agent": scout_agent, "status": scout_resp.get("status"), "action": scout_action})
+    await _safe_reply(message, f"🔍 Scout done — {scout_action}\n✍️ Spawning Writer…")
+
+    # ── Step 2: Writer (new task — inherits Scout evidence via workspace prefix) ──
+    writer_agent = f"{workspace_id}-writer"
+    try:
+        writer_task_id = kernel.create_task({
+            "goal_id": goal_id,
+            "title": mission,
+            "description": (
+                f"Workspace: {workspace_id}\n"
+                f"Based on Scout research for: {scout_task_id}\n"
+                "Use all available Search Evidence. Draft the content requested in the title."
+            ),
+            "status": "backlog",
+        })
+        kernel.assign_task(writer_task_id, writer_agent)
+    except Exception as exc:
+        print(f"[DEBUG] writer task creation failed: {exc}", flush=True)
+        await _safe_reply(message, f"⚠️ Writer task creation failed: {exc}")
+        return
+
+    print(f"[DEBUG] CE chain: spawning writer={writer_agent} task={writer_task_id}", flush=True)
+    try:
+        writer_resp = await loop.run_in_executor(None, kernel.spawn_agent, writer_agent, writer_task_id)
+    except Exception as exc:
+        print(f"[DEBUG] writer spawn failed: {exc}", flush=True)
+        await _safe_reply(message, f"⚠️ Writer failed: {exc}")
+        return
+
+    writer_preview = str(writer_resp.get("proposed_output") or "")
+    writer_action = _infer_writer_action(writer_resp)
+    writer_status = writer_resp.get("status", {})
+    writer_state = writer_status.get("state", "") if isinstance(writer_status, dict) else str(writer_status)
+    print(f"[DEBUG] writer done: status={writer_state} preview={writer_preview[:60]!r}", flush=True)
+    chain_log.append({"agent": writer_agent, "status": writer_resp.get("status"), "action": writer_action})
+
+    # ── Step 3: Critic ─────────────────────────────────────────────────────
+    await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🔍 Running Critic…")
+    print(f"[DEBUG] critic start: writer_task={writer_task_id}", flush=True)
+    try:
+        review = await _handle_critic_chain(writer_task_id, workspace_id, message, emit_message=False)
+    except Exception as exc:
+        print(f"[DEBUG] critic exception: {exc}", flush=True)
+        fallback = _chain_summary(chain_log)
+        if writer_preview:
+            fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
+        await _safe_reply(message, f"⚠️ Critic failed: {exc}\n\n{fallback}")
+        return
+    print(f"[DEBUG] critic done: review={'None' if review is None else review.get('verdict')}", flush=True)
+
+    if review is not None:
+        chain_log.append({
+            "agent": f"{workspace_id}-critic",
+            "status": review.get("verdict"),
+            "action": _infer_critic_action(review, writer_task_id),
+        })
+        review_id = review.get("id")
+        reply_markup = None
+        if review_id is not None:
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
+                InlineKeyboardButton("✏️ Edit", callback_data=f"edit_review:{review_id}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
+            ]])
+        try:
+            card = _content_engine_operator_card(writer_task_id, chain_log, writer_preview)
+            print(f"[DEBUG] operator card ({len(card)} chars): {card[:100]!r}", flush=True)
+            await message.reply_text(card, reply_markup=reply_markup)
+        except Exception as exc:
+            print(f"[DEBUG] operator card failed: {exc}", flush=True)
+            fallback = _chain_summary(chain_log)
+            if writer_preview:
+                fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
+            await _safe_reply(message, fallback)
+    else:
+        # Critic pipeline returned nothing — send what we have
+        print(f"[DEBUG] critic returned None, sending chain summary", flush=True)
+        fallback = _chain_summary(chain_log)
+        if writer_preview:
+            fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
+        await _safe_reply(message, fallback)
+
+
+async def _run_generic_chain(
+    message: Any,
+    loop: Any,
+    workspace_id: str,
+    agent_id: str,
+    task_id: str,
+    template_id: str | None,
+    chain_log: list[dict[str, Any]],
+) -> None:
+    """Message-based chaining for non-content-engine templates."""
+    current_agent = agent_id
+    for hop in range(1, _MAX_CHAIN_HOPS + 1):
+        print(f"[DEBUG] spawn start: agent={current_agent} task={task_id} hop={hop}", flush=True)
+        try:
+            response = await loop.run_in_executor(None, kernel.spawn_agent, current_agent, task_id)
+        except Exception as exc:
+            print(f"[DEBUG] spawn exception: {exc}", flush=True)
+            await message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
+            break
+        print(f"[DEBUG] spawn done: agent={current_agent} status={response.get('status')}", flush=True)
+
+        status_obj = response.get("status", {})
+        action_summary = (
+            (response.get("actions_taken") or "").strip()
+            or (response.get("observations") or "").strip()
+            or (response.get("proposed_output") or "").strip()
+        )
+        if not action_summary:
+            if isinstance(status_obj, dict):
+                action_summary = f"{status_obj.get('state', 'completed')} {status_obj.get('reason') or status_obj.get('stakes') or ''}".strip()
+            else:
+                action_summary = str(status_obj)
+        chain_log.append({
+            "agent": current_agent,
+            "status": response.get("status"),
+            "action": _summarise(action_summary, 60),
+        })
+
+        try:
+            card = _format_task_card(current_agent, response, task_id, workspace_id, template_id=template_id)
+            print(f"[DEBUG] sending card ({len(card)} chars): {card[:80]!r}", flush=True)
+            await _safe_reply(message, card, parse_mode="Markdown")
+        except Exception as exc:
+            print(f"[DEBUG] card send failed: {exc}", flush=True)
+            await _safe_reply(message, f"Agent {current_agent} done — status: {status_obj}")
+
+        if hop < _MAX_CHAIN_HOPS:
+            next_agent = _next_chain_agent(workspace_id, response.get("messages", []))
+            if next_agent:
+                next_role = next_agent.rsplit("-", 1)[-1]
+                if next_role == "critic":
+                    await _safe_reply(message, "🔍 Running Critic review…")
+                    review = await _handle_critic_chain(task_id, workspace_id, message, emit_message=True)
+                    if review is not None:
+                        chain_log.append({
+                            "agent": f"{workspace_id}-critic",
+                            "status": review.get("verdict"),
+                            "action": _infer_critic_action(review, task_id),
+                        })
+                    break
+                await _safe_reply(message, f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown")
+                current_agent = next_agent
+                continue
+        break
+
+    if chain_log:
+        await _safe_reply(message, "🔗 Chain Summary\n" + _chain_summary(chain_log))
+
+
 async def task_command(update: Update, context: Any) -> None:
     """
     /task <workspace_id> <mission text>
@@ -977,119 +1156,17 @@ async def task_command(update: Update, context: Any) -> None:
         parse_mode="Markdown",
     )
 
-    current_agent = agent_id
-    chain_log: list[dict[str, Any]] = []
-    writer_preview = ""
-    _operator_card_sent = False
     loop = asyncio.get_event_loop()
-    for hop in range(1, _MAX_CHAIN_HOPS + 1):
-        print(f"[DEBUG] spawn start: agent={current_agent} task={task_id} hop={hop}", flush=True)
-        env_check = kernel._subprocess_env()
-        print(f"[DEBUG] env: GOOGLE_API_KEY={'SET' if env_check.get('GOOGLE_API_KEY') else 'MISSING'} APEX_HOME={env_check.get('APEX_HOME')} PYTHONPATH={env_check.get('PYTHONPATH','')[:60]}", flush=True)
-        try:
-            response = await loop.run_in_executor(
-                None, kernel.spawn_agent, current_agent, task_id
-            )
-        except Exception as exc:
-            print(f"[DEBUG] spawn exception: {exc}", flush=True)
-            await update.message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
-            break
-        print(f"[DEBUG] spawn done: agent={current_agent} status={response.get('status')}", flush=True)
+    chain_log: list[dict[str, Any]] = []
 
-        role = current_agent.split("-")[-1].lower()
-        action_summary = (
-            (response.get("actions_taken") or "").strip()
-            or (response.get("observations") or "").strip()
-            or (response.get("proposed_output") or "").strip()
+    if is_content_engine:
+        await _run_content_engine_chain(
+            update.message, loop, workspace_id, agent_id, task_id, mission, goal_id, chain_log
         )
-        if is_content_engine:
-            if role == "scout":
-                action_summary = _infer_scout_action(response, task_id)
-            elif role == "writer":
-                action_summary = _infer_writer_action(response)
-                writer_preview = str(response.get("proposed_output") or writer_preview)
-        elif not action_summary:
-            status_obj = response.get("status", {})
-            if isinstance(status_obj, dict):
-                action_summary = f"{status_obj.get('state', 'completed')} {status_obj.get('reason') or status_obj.get('stakes') or ''}".strip()
-            else:
-                action_summary = str(status_obj)
-        chain_log.append({
-            "agent": current_agent,
-            "status": response.get("status"),
-            "action": _summarise(action_summary, 60),
-        })
-
-        if not is_content_engine:
-            try:
-                card = _format_task_card(current_agent, response, task_id, workspace_id, template_id=template_id)
-                print(f"[DEBUG] sending card ({len(card)} chars): {card[:80]!r}", flush=True)
-                await _safe_reply(update.message, card, parse_mode="Markdown")
-            except Exception as exc:
-                print(f"[DEBUG] card send failed: {exc}", flush=True)
-                await _safe_reply(update.message, f"Agent {current_agent} done — status: {response.get('status')}")
-
-        # Auto-chain: follow messages to next agent (capped at MAX_CHAIN_HOPS)
-        if hop < _MAX_CHAIN_HOPS:
-            next_agent = _next_chain_agent(workspace_id, response.get("messages", []))
-            if next_agent:
-                next_role = next_agent.rsplit("-", 1)[-1]
-                if next_role == "critic":
-                    # Critic runs via review pipeline, not a direct spawn
-                    if not is_content_engine:
-                        await _safe_reply(update.message, "🔍 Running Critic review…")
-                    review = await _handle_critic_chain(
-                        task_id,
-                        workspace_id,
-                        update.message,
-                        emit_message=not is_content_engine,
-                    )
-                    if review is not None:
-                        chain_log.append({
-                            "agent": f"{workspace_id}-critic",
-                            "status": review.get("verdict"),
-                            "action": _infer_critic_action(review, task_id),
-                        })
-                        if is_content_engine:
-                            review_id = review.get("id")
-                            reply_markup = None
-                            if review_id is not None:
-                                reply_markup = InlineKeyboardMarkup([[
-                                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
-                                    InlineKeyboardButton("✏️ Edit", callback_data=f"edit_review:{review_id}"),
-                                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
-                                ]])
-                            try:
-                                card = _content_engine_operator_card(task_id, chain_log, writer_preview)
-                                print(f"[DEBUG] operator card ({len(card)} chars): {card[:120]!r}", flush=True)
-                                await update.message.reply_text(card, reply_markup=reply_markup)
-                                _operator_card_sent = True
-                            except Exception as exc:
-                                print(f"[DEBUG] operator card send failed: {exc}", flush=True)
-                                await _safe_reply(update.message, _chain_summary(chain_log))
-                                _operator_card_sent = True
-                    break
-                if not is_content_engine:
-                    await _safe_reply(
-                        update.message,
-                        f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown"
-                    )
-                current_agent = next_agent
-                continue
-        break
-
-    if chain_log and not is_content_engine:
-        await _safe_reply(
-            update.message,
-            "🔗 Chain Summary\n" + _chain_summary(chain_log),
+    else:
+        await _run_generic_chain(
+            update.message, loop, workspace_id, agent_id, task_id, template_id, chain_log
         )
-    elif chain_log and is_content_engine and not _operator_card_sent:
-        # Chain ended before Critic — send what we have so the user isn't left hanging
-        print(f"[DEBUG] content-engine chain ended without operator card, sending fallback", flush=True)
-        fallback = _chain_summary(chain_log)
-        if writer_preview:
-            fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
-        await _safe_reply(update.message, fallback)
 
 
 async def approvals_command(update: Update, context: Any) -> None:

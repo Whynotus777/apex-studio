@@ -140,12 +140,14 @@ def call_critic(system_prompt, user_prompt):
         usr_path = uf.name
 
     try:
-        # Determine model based on stakes (for now, always local)
-        model = "qwen3.5-apex"
+        # Use Gemini Flash as primary; fall back to local only if no API key
+        google_key = os.environ.get("GOOGLE_API_KEY", "")
+        model = "gemini-3-flash-preview" if google_key else "qwen3.5-apex"
         result = subprocess.run(
             ["python3", os.path.join(APEX_HOME, "kernel", "call_model.py"),
              model, sys_path, usr_path, "0.1"],
-            capture_output=True, text=True, timeout=300
+            capture_output=True, text=True, timeout=120,
+            stdin=subprocess.DEVNULL,
         )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
@@ -274,11 +276,11 @@ def process_review(review, dry_run=False):
         UPDATE reviews SET
             verdict = ?,
             feedback = ?,
-            triage_model = 'qwen3.5-apex',
-            review_model = CASE WHEN ? IN ('medium','high') THEN 'claude-opus' ELSE 'qwen3.5-apex' END,
+            triage_model = 'gemini-3-flash-preview',
+            review_model = 'gemini-3-flash-preview',
             reviewed_at = datetime('now')
         WHERE id = ?
-    """, [verdict, json.dumps(parsed), stakes, review_id])
+    """, [verdict, json.dumps(parsed), review_id])
 
     # Update task status based on verdict
     if verdict == "PASS":
