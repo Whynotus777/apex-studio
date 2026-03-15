@@ -26,10 +26,12 @@ def cleanup(conn):
 
 conn = sqlite3.connect(str(k.db_path))
 cleanup(conn)
-# Ensure 'builder' exists in agent_status (tests may run in isolation)
-conn.execute(
-    "INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES ('builder', 'idle', 'qwen3.5-apex')"
-)
+# Ensure required agents exist in agent_status (tests may run in isolation)
+for _agent in ("builder", "scout"):
+    conn.execute(
+        "INSERT OR IGNORE INTO agent_status (agent_name, status, model_active) VALUES (?, 'idle', 'qwen3.5-apex')",
+        (_agent,),
+    )
 conn.commit()
 conn.close()
 

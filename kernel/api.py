@@ -818,7 +818,8 @@ class ApexKernel:
         self._ensure_agent_exists(agent_id)
         return self._fetch_all(
             """
-            SELECT id, agent_id, resource, level, max_spend_per_day, requires_approval, created_at
+            SELECT id, agent_id, resource, level, max_spend_per_day,
+                   requires_approval, created_at, workspace_id
             FROM permissions
             WHERE agent_id = ?
             ORDER BY resource
@@ -888,7 +889,8 @@ class ApexKernel:
         self._ensure_agent_exists(agent_id)
         budgets = self._fetch_all(
             """
-            SELECT id, agent_id, budget_type, limit_amount, spent_amount, period, alert_threshold, created_at
+            SELECT id, agent_id, budget_type, limit_amount, spent_amount,
+                   period, alert_threshold, created_at, workspace_id
             FROM budgets
             WHERE agent_id = ?
             ORDER BY budget_type
@@ -973,6 +975,7 @@ class ApexKernel:
             "SELECT agent_name, status, model_active, last_heartbeat FROM agent_status WHERE workspace_id = ?",
             (workspace_id,),
         )
+        ws["agent_count"] = len(ws["agents"])
         return ws
 
     def delete_workspace(self, workspace_id: str) -> None:
