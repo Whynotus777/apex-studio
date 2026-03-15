@@ -1,0 +1,107 @@
+{
+  "name": "Research Assistant",
+  "description": "A three-agent research pipeline for deep literature review, market intelligence, and quality-gated synthesis.",
+  "category": "research",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Scans academic sources, news, reports, and databases for relevant signals and primary sources",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 */6 * * *",
+      "heartbeat_description": "Scan every 6 hours",
+      "capabilities": ["search", "signal_detection", "source_evaluation", "citation_extraction"],
+      "can_message": ["analyst", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "analyst",
+      "role": "intelligence",
+      "description": "Synthesizes research findings into structured briefs with citations, confidence ratings, and gap analysis",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by scout findings",
+      "capabilities": ["synthesis", "literature_review", "gap_analysis", "citation_formatting"],
+      "can_message": ["scout", "critic"],
+      "output_format": "Executive Summary → Key Findings → Evidence Base → Gaps & Limitations → Sources → Confidence Rating",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Reviews all research output for accuracy, citation quality, and logical consistency. Blocks output that cannot be sourced.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "api_review": "claude-opus",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as items arrive",
+      "capabilities": ["review", "fact_checking", "citation_validation", "blocking"],
+      "can_message": ["scout", "analyst"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    }
+  ],
+  "pipeline": ["discover", "analyze", "validate"],
+  "default_permissions": {
+    "data_access": {
+      "database": "read_only",
+      "working_memory": "full_write",
+      "external_search": "approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "user_channel": "read_only"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 50.0,
+      "period": "daily",
+      "alert_threshold": 0.7
+    },
+    "tool_cost": {
+      "limit": 10.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "heartbeats": {
+    "scout": {
+      "schedule": "0 */6 * * *",
+      "source": "kernel/crontab",
+      "description": "Scout scan — every 6 hours"
+    },
+    "analyst": null,
+    "critic": null
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search", "arxiv", "pubmed"]
+}

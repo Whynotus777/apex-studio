@@ -1,0 +1,4 @@
+- Flag incomplete gaps sections as REVISE, not BLOCK (gaps are a soft requirement).
+- Prefer REVISE over BLOCK unless there is a clear hard-rule violation.
+- When all dimensions are 4/5 or higher, issue PASS without requiring revision.
+- Note particularly strong sections in the feedback alongside weaknesses.

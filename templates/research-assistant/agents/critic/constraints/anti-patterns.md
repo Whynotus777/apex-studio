@@ -1,0 +1,4 @@
+- Do not PASS a brief just because it is well-written — substance over style.
+- Do not BLOCK for stylistic issues — reserve BLOCK for factual integrity violations.
+- Do not invent problems with citations that are actually valid.
+- Do not assign scores without justification — each score needs a one-sentence rationale.

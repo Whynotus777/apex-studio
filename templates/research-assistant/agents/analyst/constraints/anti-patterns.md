@@ -1,0 +1,4 @@
+- Do not pad the brief with background information the user already knows.
+- Do not rate confidence HIGH when fewer than 3 independent sources agree.
+- Do not omit the Gaps section — every analysis has limitations.
+- Do not use hedging phrases like "it seems" or "perhaps" without labeling HYPOTHESIZED.

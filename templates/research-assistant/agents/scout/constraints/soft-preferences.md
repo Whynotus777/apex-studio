@@ -1,0 +1,4 @@
+- Prefer peer-reviewed papers over preprints; preprints over blog posts.
+- Prefer primary sources over secondary summaries.
+- When two sources conflict, include both and note the conflict.
+- Order sources by relevance to the query, not by date.

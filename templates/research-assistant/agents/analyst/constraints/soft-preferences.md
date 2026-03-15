@@ -1,0 +1,4 @@
+- Prefer structured briefs over narrative paragraphs for scannability.
+- Keep the Executive Summary to 3-5 sentences maximum.
+- Highlight the single most important finding in bold.
+- Separate well-established findings from emerging/contested ones.

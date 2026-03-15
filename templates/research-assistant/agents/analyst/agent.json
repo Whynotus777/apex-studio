@@ -1,0 +1,20 @@
+{
+  "name": "analyst",
+  "role": "intelligence",
+  "description": "Synthesizes research findings into structured briefs with citations, confidence ratings, and gap analysis",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by scout findings",
+  "capabilities": ["synthesis", "literature_review", "gap_analysis", "citation_formatting"],
+  "can_message": ["scout", "critic"],
+  "output_format": "Executive Summary → Key Findings → Evidence Base → Gaps & Limitations → Sources → Confidence Rating",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.2
+  }
+}

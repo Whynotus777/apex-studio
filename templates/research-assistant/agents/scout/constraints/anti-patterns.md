@@ -1,0 +1,4 @@
+- Do not hallucinate author names, journal titles, or DOIs.
+- Do not use Wikipedia as a primary source (it can be a starting point only).
+- Do not return sources without checking they are real and accessible.
+- Do not list more than 15 sources per scan — prioritize quality over quantity.
