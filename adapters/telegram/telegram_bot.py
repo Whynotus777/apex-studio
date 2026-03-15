@@ -95,6 +95,16 @@ def _truncate(text: str, limit: int = 4000) -> str:
     return text if len(text) <= limit else text[:limit] + "\n\n... (truncated)"
 
 
+async def _safe_reply(message: Any, text: str, **kwargs: Any) -> None:
+    """Send a reply with Markdown; fall back to plain text if parsing fails."""
+    try:
+        await message.reply_text(text, **kwargs)
+    except Exception:
+        kwargs.pop("parse_mode", None)
+        kwargs.pop("reply_markup", None)
+        await message.reply_text(text, **kwargs)
+
+
 def _icon_for_status(status: str) -> str:
     return {
         "idle": "🟢",
@@ -661,7 +671,8 @@ async def task_command(update: Update, context: Any) -> None:
             await update.message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
             break
 
-        await update.message.reply_text(
+        await _safe_reply(
+            update.message,
             _format_task_card(current_agent, response, task_id, workspace_id),
             parse_mode="Markdown",
         )
@@ -670,7 +681,8 @@ async def task_command(update: Update, context: Any) -> None:
         if hop < _MAX_CHAIN_HOPS:
             next_agent = _next_chain_agent(workspace_id, response.get("messages", []))
             if next_agent:
-                await update.message.reply_text(
+                await _safe_reply(
+                    update.message,
                     f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown"
                 )
                 current_agent = next_agent
@@ -759,7 +771,7 @@ async def rollup_command(update: Update, context: Any) -> None:
         return
     await update.message.reply_text("☀️ Triggering morning rollup...")
     response = kernel.spawn_agent("apex")
-    await update.message.reply_text(_truncate(_format_spawn_result(response)))
+    await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 
 async def spawn_command(update: Update, context: Any) -> None:
@@ -780,7 +792,7 @@ async def spawn_command(update: Update, context: Any) -> None:
 
     await update.message.reply_text(f"🚀 Spawning {agent_name}...")
     response = kernel.spawn_agent(agent_name, task_id)
-    await update.message.reply_text(_truncate(_format_spawn_result(response)))
+    await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 
 async def handle_message(update: Update, context: Any) -> None:
@@ -794,7 +806,7 @@ async def handle_message(update: Update, context: Any) -> None:
 
     await update.message.reply_text("📨 Routing to Apex...")
     response = kernel.route_user_message(text)
-    await update.message.reply_text(_truncate(_format_spawn_result(response)))
+    await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 
 async def handle_callback(update: Update, context: Any) -> None:
