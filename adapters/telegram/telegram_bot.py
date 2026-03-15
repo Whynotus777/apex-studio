@@ -25,6 +25,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from kernel.api import ApexKernel  # noqa: E402
+from kernel.evidence import EvidenceStore  # noqa: E402
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -61,6 +62,7 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 kernel = ApexKernel(APEX_HOME)
+evidence_store = EvidenceStore(str(APEX_HOME / "db" / "apex_state.db"))
 
 # Pipeline stage → agent role name
 _PIPELINE_ROLE_MAP: dict[str, str] = {
@@ -116,12 +118,76 @@ def _icon_for_status(status: str) -> str:
     }.get(status, "⬜")
 
 
+def _agent_role_icon(agent_name: str) -> str:
+    role = agent_name.split("-")[-1].lower()
+    return {
+        "scout": "🔭",
+        "writer": "✍️",
+        "analyst": "📊",
+        "builder": "🔨",
+        "critic": "🛡️",
+        "scheduler": "📅",
+    }.get(role, "🤖")
+
+
 # ── Task-chain helpers ───────────────────────────────────────────────────────
 
 _MAX_CHAIN_HOPS: int = 2
 
 # All role names that can be auto-chained (template names, not workspace-scoped)
 _CHAIN_TARGETS: set[str] = {"analyst", "builder", "writer", "critic"}
+
+
+def _critic_score(task_id: str) -> str:
+    """Return formatted average eval score for a task, e.g. '4.2/5', or ''."""
+    rows = kernel._fetch_all(
+        "SELECT score, max_score FROM evals WHERE task_id = ? AND score IS NOT NULL",
+        (task_id,),
+    )
+    if not rows:
+        return ""
+    scores = [r["score"] for r in rows if r["score"] is not None]
+    if not scores:
+        return ""
+    return f"{sum(scores) / len(scores):.1f}/5"
+
+
+async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) -> None:
+    """Submit task for Critic review, run pipeline, post result for THIS task."""
+    try:
+        kernel.submit_for_review(task_id, "low")
+    except ValueError:
+        pass  # already queued — that's fine
+
+    try:
+        results = kernel.run_critic_pipeline()
+    except Exception as exc:
+        await _safe_reply(message, f"⚠️ Critic pipeline failed: {exc}")
+        return
+
+    review = next((r for r in results if r.get("task_id") == task_id), None)
+    if review is None:
+        await _safe_reply(message, "⚠️ Critic found no review for this task.")
+        return
+
+    verdict = (review.get("verdict") or "").upper()
+    feedback = review.get("feedback") or ""
+    if isinstance(feedback, dict):
+        feedback = str(feedback.get("summary") or feedback)
+
+    score_str = _critic_score(task_id)
+    score_part = f" ({score_str})" if score_str else ""
+
+    if verdict == "PASS":
+        text = f"✅ Critic approved{score_part}"
+    elif verdict in ("REVISE", "BLOCK"):
+        emoji = "🔄" if verdict == "REVISE" else "🚫"
+        short = _summarise(str(feedback), 200)
+        text = f"{emoji} Critic requested revision: {short}"
+    else:
+        text = f"🔍 Critic verdict: {verdict or 'pending'}{score_part}"
+
+    await _safe_reply(message, text)
 
 
 def _next_chain_agent(workspace_id: str, messages: list[dict[str, Any]]) -> str | None:
@@ -145,6 +211,17 @@ def _next_chain_agent(workspace_id: str, messages: list[dict[str, Any]]) -> str 
         if rows:
             return agent_id
     return None
+
+
+def _chain_summary(chain_log: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for step in chain_log:
+        agent = str(step.get("agent", "agent")).split("-")[-1]
+        label = agent.capitalize()
+        icon = _agent_role_icon(agent)
+        action = str(step.get("action") or step.get("status") or "completed").strip()
+        lines.append(f"{icon} {label} → {action}")
+    return "\n".join(lines)
 
 
 def _fetch_task_evidence(task_id: str) -> list[dict[str, Any]]:
@@ -376,6 +453,7 @@ async def start_command(update: Update, context: Any) -> None:
         "/launch <template_id> — Launch a template\n"
         "/workspaces — Active workspaces\n"
         "/workspace <workspace_id> — Workspace detail\n"
+        "/evidence <task_id> — Stored evidence for a task\n"
         "/task <workspace_id> <mission> — Create and run a task\n"
         "/approvals — Pending approval queue\n"
         "/rollup — Trigger morning rollup\n"
@@ -584,6 +662,47 @@ async def workspace_command(update: Update, context: Any) -> None:
     )
 
 
+async def evidence_command(update: Update, context: Any) -> None:
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /evidence <task_id>")
+        return
+
+    task_id = args[0]
+    try:
+        evidence_rows = evidence_store.get_evidence(task_id)
+    except Exception as exc:
+        await update.message.reply_text(f"Failed to load evidence for `{task_id}`: {exc}", parse_mode="Markdown")
+        return
+
+    if not evidence_rows:
+        await update.message.reply_text("No evidence stored for this task.")
+        return
+
+    chunks: list[str] = []
+    for row in evidence_rows:
+        query = row.get("query") or "unknown query"
+        results = row.get("results") or []
+        lines = [
+            f"🔎 Query: {query}",
+            f"Results: {len(results)}",
+        ]
+        for result in results:
+            title = (result.get("title") or "Untitled").strip()
+            url = (result.get("url") or "URL unavailable").strip()
+            snippet = (result.get("snippet") or "").strip().replace("\n", " ")
+            snippet = snippet[:100] + ("..." if len(snippet) > 100 else "")
+            lines.append(f"- {title}")
+            lines.append(f"  {url}")
+            lines.append(f"  {snippet or 'No snippet'}")
+        chunks.append("\n".join(lines))
+
+    await _safe_reply(update.message, _truncate("\n\n".join(chunks), 4000))
+
+
 async def task_command(update: Update, context: Any) -> None:
     """
     /task <workspace_id> <mission text>
@@ -664,6 +783,7 @@ async def task_command(update: Update, context: Any) -> None:
     )
 
     current_agent = agent_id
+    chain_log: list[dict[str, Any]] = []
     for hop in range(1, _MAX_CHAIN_HOPS + 1):
         try:
             response = kernel.spawn_agent(current_agent, task_id)
@@ -671,16 +791,39 @@ async def task_command(update: Update, context: Any) -> None:
             await update.message.reply_text(f"Agent spawn failed ({current_agent}): {exc}")
             break
 
+        action_summary = (
+            (response.get("actions_taken") or "").strip()
+            or (response.get("observations") or "").strip()
+            or (response.get("proposed_output") or "").strip()
+        )
+        if not action_summary:
+            status_obj = response.get("status", {})
+            if isinstance(status_obj, dict):
+                action_summary = f"{status_obj.get('state', 'completed')} {status_obj.get('reason') or status_obj.get('stakes') or ''}".strip()
+            else:
+                action_summary = str(status_obj)
+        chain_log.append({
+            "agent": current_agent,
+            "status": response.get("status"),
+            "action": _summarise(action_summary, 60),
+        })
+
         await _safe_reply(
             update.message,
             _format_task_card(current_agent, response, task_id, workspace_id),
             parse_mode="Markdown",
         )
 
-        # Auto-chain: follow messages to analyst/builder (capped at MAX_CHAIN_HOPS)
+        # Auto-chain: follow messages to next agent (capped at MAX_CHAIN_HOPS)
         if hop < _MAX_CHAIN_HOPS:
             next_agent = _next_chain_agent(workspace_id, response.get("messages", []))
             if next_agent:
+                next_role = next_agent.rsplit("-", 1)[-1]
+                if next_role == "critic":
+                    # Critic runs via review pipeline, not a direct spawn
+                    await _safe_reply(update.message, "🔍 Running Critic review…")
+                    await _handle_critic_chain(task_id, workspace_id, update.message)
+                    break
                 await _safe_reply(
                     update.message,
                     f"🔗 Chaining to `{next_agent}`…", parse_mode="Markdown"
@@ -688,6 +831,12 @@ async def task_command(update: Update, context: Any) -> None:
                 current_agent = next_agent
                 continue
         break
+
+    if chain_log:
+        await _safe_reply(
+            update.message,
+            "🔗 Chain Summary\n" + _chain_summary(chain_log),
+        )
 
 
 async def approvals_command(update: Update, context: Any) -> None:
@@ -913,6 +1062,7 @@ def main() -> None:
     app.add_handler(CommandHandler("launch", launch_command))
     app.add_handler(CommandHandler("workspaces", workspaces_command))
     app.add_handler(CommandHandler("workspace", workspace_command))
+    app.add_handler(CommandHandler("evidence", evidence_command))
     app.add_handler(CommandHandler("task", task_command))
     app.add_handler(CommandHandler("approvals", approvals_command))
     app.add_handler(CommandHandler("rollup", rollup_command))

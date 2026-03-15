@@ -192,6 +192,12 @@ def generate_queries(task_text):
         return [task_text[:200]]
 
 try:
+    from kernel.evidence import EvidenceStore
+    _ev_check = EvidenceStore(db_path)
+    if _ev_check.get_evidence(task_id):
+        # Evidence already exists (e.g. from Scout) — reuse it, skip new searches
+        print(_ev_check.format_for_prompt(task_id))
+        sys.exit(0)
     from kernel.api import ApexKernel
     k = ApexKernel()
     tools = k.get_agent_tools(agent_name)
