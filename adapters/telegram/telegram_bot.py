@@ -152,6 +152,66 @@ def _critic_score(task_id: str) -> str:
     return f"{sum(scores) / len(scores):.1f}/5"
 
 
+def _normalize_review_feedback(feedback: Any) -> dict[str, Any]:
+    if isinstance(feedback, dict):
+        return feedback
+    if isinstance(feedback, str):
+        try:
+            parsed = json.loads(feedback)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {"summary": feedback}
+    return {}
+
+
+def _agent_exists(agent_id: str) -> bool:
+    rows = kernel._fetch_all(
+        "SELECT agent_name FROM agent_status WHERE agent_name = ?",
+        (agent_id,),
+    )
+    return bool(rows)
+
+
+def _smart_revision_route(
+    review: dict[str, Any],
+    workspace_id: str,
+) -> tuple[str, str, str]:
+    feedback_data = _normalize_review_feedback(review.get("feedback"))
+    scores_raw = feedback_data.get("scores") or {}
+    scores: dict[str, float] = {}
+    if isinstance(scores_raw, dict):
+        for key, value in scores_raw.items():
+            if isinstance(value, (int, float)):
+                scores[str(key).lower()] = float(value)
+
+    original_agent = str(review.get("agent_name") or "").strip() or f"{workspace_id}-critic"
+    scout_agent = f"{workspace_id}-scout"
+
+    grounding_score = scores.get("grounding")
+    accuracy_score = scores.get("accuracy")
+    if (
+        ((grounding_score is not None and grounding_score < 3)
+         or (accuracy_score is not None and accuracy_score < 3))
+        and _agent_exists(scout_agent)
+    ):
+        if grounding_score is not None and grounding_score < 3:
+            reason = f"weak sources (grounding: {int(grounding_score)}/5)"
+        else:
+            assert accuracy_score is not None
+            reason = f"weak sources (accuracy: {int(accuracy_score)}/5)"
+        return scout_agent, "Scout", reason
+
+    for dimension in ("completeness", "actionability", "conciseness"):
+        score = scores.get(dimension)
+        if score is not None and score < 3:
+            label = original_agent.split("-")[-1].capitalize()
+            return original_agent, label, f"incomplete output ({dimension}: {int(score)}/5)"
+
+    label = original_agent.split("-")[-1].capitalize()
+    return original_agent, label, "needs revision"
+
+
 async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) -> None:
     """Submit task for Critic review, run pipeline, post result for THIS task."""
     try:
@@ -171,9 +231,12 @@ async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) ->
         return
 
     verdict = (review.get("verdict") or "").upper()
+    feedback_data = _normalize_review_feedback(review.get("feedback"))
     feedback = review.get("feedback") or ""
     if isinstance(feedback, dict):
         feedback = str(feedback.get("summary") or feedback)
+    elif feedback_data:
+        feedback = str(feedback_data.get("feedback") or feedback_data.get("summary") or feedback)
 
     score_str = _critic_score(task_id)
     score_part = f" ({score_str})" if score_str else ""
@@ -188,6 +251,27 @@ async def _handle_critic_chain(task_id: str, workspace_id: str, message: Any) ->
         text = f"🔍 Critic verdict: {verdict or 'pending'}{score_part}"
 
     await _safe_reply(message, text)
+
+    if verdict in ("REVISE", "BLOCK"):
+        route_agent, route_label, route_reason = _smart_revision_route(review, workspace_id)
+        outbound_feedback = (
+            feedback_data.get("feedback")
+            or feedback_data.get("summary")
+            or str(feedback)
+        )
+        try:
+            kernel.send_message(
+                "critic",
+                route_agent,
+                f"{verdict}: {outbound_feedback}",
+                "review_feedback",
+            )
+        except Exception:
+            pass
+        await _safe_reply(
+            message,
+            f"🔄 Revision routed to {route_label} — {route_reason}",
+        )
 
 
 def _next_chain_agent(workspace_id: str, messages: list[dict[str, Any]]) -> str | None:

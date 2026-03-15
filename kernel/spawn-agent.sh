@@ -192,12 +192,34 @@ def generate_queries(task_text):
         return [task_text[:200]]
 
 try:
+    import sqlite3 as _sqlite3
     from kernel.evidence import EvidenceStore
-    _ev_check = EvidenceStore(db_path)
-    if _ev_check.get_evidence(task_id):
-        # Evidence already exists (e.g. from Scout) — reuse it, skip new searches
-        print(_ev_check.format_for_prompt(task_id))
+    _ev = EvidenceStore(db_path)
+
+    # 1. Same-task evidence (e.g. agent already ran search on this task)
+    if _ev.get_evidence(task_id):
+        print(_ev.format_for_prompt(task_id))
         sys.exit(0)
+
+    # 2. Workspace-level evidence inheritance: find the most recent evidence
+    #    stored by any agent in the same workspace (agent_id prefix matches).
+    #    e.g. agent ws-abc123-writer inherits ws-abc123-scout's evidence.
+    _ws_prefix = agent_name.rsplit('-', 1)[0]  # ws-abc123-scout → ws-abc123
+    if _ws_prefix.startswith('ws-'):
+        _conn = _sqlite3.connect(db_path)
+        _row = _conn.execute(
+            """SELECT task_id FROM evidence
+               WHERE agent_id LIKE ? AND task_id != ?
+               ORDER BY created_at DESC LIMIT 1""",
+            (_ws_prefix + '-%', task_id),
+        ).fetchone()
+        _conn.close()
+        if _row:
+            _inherited_tid = _row[0]
+            if _ev.get_evidence(_inherited_tid):
+                print(_ev.format_for_prompt(_inherited_tid))
+                sys.exit(0)
+
     from kernel.api import ApexKernel
     k = ApexKernel()
     tools = k.get_agent_tools(agent_name)
