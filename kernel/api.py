@@ -24,6 +24,7 @@ class ApexKernel:
         self.db_path = Path(db_path or self.apex_home / "db" / "apex_state.db").resolve()
         self.kernel_dir = self.apex_home / "kernel"
         self.agents_dir = self.apex_home / "templates" / "startup-chief-of-staff" / "agents"
+        self._migrate()
 
     def create_agent(self, config: dict[str, Any]) -> str:
         agent_id = str(config.get("name") or config.get("id") or "").strip()
@@ -315,6 +316,9 @@ class ApexKernel:
         if "goal_id" in filters:
             conditions.append("t.goal_id = ?")
             params.append(filters["goal_id"])
+        if "workspace_id" in filters:
+            conditions.append("t.workspace_id = ?")
+            params.append(filters["workspace_id"])
 
         where = " AND ".join(conditions)
         return self._fetch_all(
@@ -322,7 +326,7 @@ class ApexKernel:
             SELECT t.id, t.project_id, t.goal_id, t.title, t.description,
                    t.pipeline_stage, t.assigned_to, t.checked_out_by,
                    t.status, t.priority, t.review_status,
-                   t.created_at, t.completed_at,
+                   t.created_at, t.completed_at, t.workspace_id,
                    p.name AS project_name, g.name AS goal_name
             FROM tasks t
             LEFT JOIN projects p ON t.project_id = p.id
@@ -436,9 +440,11 @@ class ApexKernel:
             row["feedback"] = self._load_json(row.get("feedback"), fallback=row.get("feedback"))
         return processed
 
-    def get_approval_queue(self) -> list[dict[str, Any]]:
+    def get_approval_queue(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
+        extra = "AND r.workspace_id = ?" if workspace_id is not None else ""
+        params = (workspace_id,) if workspace_id is not None else ()
         return self._fetch_all(
-            """
+            f"""
             SELECT
                 r.id AS review_id,
                 r.task_id,
@@ -448,6 +454,7 @@ class ApexKernel:
                 r.feedback,
                 r.created_at,
                 r.reviewed_at,
+                r.workspace_id,
                 t.title,
                 t.description,
                 t.review_status,
@@ -455,8 +462,10 @@ class ApexKernel:
             FROM reviews r
             JOIN tasks t ON t.id = r.task_id
             WHERE t.review_status = 'critic_passed'
+            {extra}
             ORDER BY r.created_at ASC
-            """
+            """,
+            params,
         )
 
     def approve_action(self, review_id: int) -> None:
@@ -536,16 +545,22 @@ class ApexKernel:
             )
             conn.commit()
 
-    def get_inbox(self, agent_id: str) -> list[dict[str, Any]]:
+    def get_inbox(self, agent_id: str, workspace_id: str | None = None) -> list[dict[str, Any]]:
         self._ensure_agent_exists(agent_id)
+        extra = "AND workspace_id = ?" if workspace_id is not None else ""
+        params: list[Any] = [agent_id]
+        if workspace_id is not None:
+            params.append(workspace_id)
         return self._fetch_all(
-            """
-            SELECT id, created_at, from_agent, to_agent, thread_id, msg_type, priority, content, status, task_id
+            f"""
+            SELECT id, created_at, from_agent, to_agent, thread_id, msg_type,
+                   priority, content, status, task_id, workspace_id
             FROM agent_messages
             WHERE to_agent = ? AND status = 'pending'
+            {extra}
             ORDER BY priority ASC, created_at ASC
             """,
-            (agent_id,),
+            params,
         )
 
     def route_user_message(self, text: str) -> dict[str, Any]:
@@ -573,22 +588,28 @@ class ApexKernel:
         else:
             raise ValueError(f"Unsupported channel: {channel}. Available: telegram")
 
-    def get_eval_history(self, agent_id: str) -> list[dict[str, Any]]:
+    def get_eval_history(self, agent_id: str, workspace_id: str | None = None) -> list[dict[str, Any]]:
         self._ensure_agent_exists(agent_id)
+        extra = "AND workspace_id = ?" if workspace_id is not None else ""
+        params: list[Any] = [agent_id]
+        if workspace_id is not None:
+            params.append(workspace_id)
         return self._fetch_all(
-            """
-            SELECT id, task_id, agent_name, eval_layer, eval_type, dimension, score, max_score, notes, created_at
+            f"""
+            SELECT id, task_id, agent_name, eval_layer, eval_type, dimension,
+                   score, max_score, notes, created_at, workspace_id
             FROM evals
             WHERE agent_name = ?
+            {extra}
             ORDER BY created_at DESC, id DESC
             """,
-            (agent_id,),
+            params,
         )
 
     def route_model(self, agent_id: str, stakes: str = "low") -> str:
         self._ensure_agent_exists(agent_id)
-        agent_json_path = self.agents_dir / agent_id / "agent.json"
-        if not agent_json_path.exists():
+        agent_json_path = self._resolve_agent_config_path(agent_id)
+        if agent_json_path is None or not agent_json_path.exists():
             return "qwen3.5-apex"
 
         config = json.loads(agent_json_path.read_text())
@@ -910,6 +931,73 @@ class ApexKernel:
         return "allowed"
 
     # ------------------------------------------------------------------ #
+    # Workspace primitive                                                  #
+    # ------------------------------------------------------------------ #
+
+    def create_workspace(self, template_id: str, name: str | None = None) -> str:
+        """Create a new workspace for the given template. Returns the workspace_id."""
+        workspace_id = f"ws-{uuid.uuid4().hex[:8]}"
+        name = name or f"{template_id}-{workspace_id}"
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO workspaces (id, template_id, name, status) VALUES (?, ?, ?, 'active')",
+                (workspace_id, template_id, name),
+            )
+            conn.commit()
+        return workspace_id
+
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        """Return all workspaces with agent counts."""
+        workspaces = self._fetch_all(
+            "SELECT id, template_id, name, status, created_at FROM workspaces ORDER BY created_at DESC"
+        )
+        with self._connect() as conn:
+            for ws in workspaces:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM agent_status WHERE workspace_id = ?",
+                    (ws["id"],),
+                ).fetchone()
+                ws["agent_count"] = row["cnt"] if row else 0
+        return workspaces
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any]:
+        """Return a workspace by id, including its agents."""
+        rows = self._fetch_all(
+            "SELECT id, template_id, name, status, created_at FROM workspaces WHERE id = ?",
+            (workspace_id,),
+        )
+        if not rows:
+            raise ValueError(f"Workspace '{workspace_id}' does not exist.")
+        ws = rows[0]
+        ws["agents"] = self._fetch_all(
+            "SELECT agent_name, status, model_active, last_heartbeat FROM agent_status WHERE workspace_id = ?",
+            (workspace_id,),
+        )
+        return ws
+
+    def delete_workspace(self, workspace_id: str) -> None:
+        """Mark a workspace inactive and remove its agents from agent_status."""
+        rows = self._fetch_all(
+            "SELECT id FROM workspaces WHERE id = ?", (workspace_id,)
+        )
+        if not rows:
+            raise ValueError(f"Workspace '{workspace_id}' does not exist.")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE workspaces SET status = 'deleted' WHERE id = ?", (workspace_id,)
+            )
+            conn.execute(
+                "DELETE FROM agent_status WHERE workspace_id = ?", (workspace_id,)
+            )
+            conn.execute(
+                "DELETE FROM permissions WHERE workspace_id = ?", (workspace_id,)
+            )
+            conn.execute(
+                "DELETE FROM budgets WHERE workspace_id = ?", (workspace_id,)
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------ #
     # Template primitive                                                   #
     # ------------------------------------------------------------------ #
 
@@ -945,23 +1033,44 @@ class ApexKernel:
             raise FileNotFoundError(f"Template '{template_id}' not found at {manifest_path}")
         return json.loads(manifest_path.read_text())
 
-    def launch_template(self, template_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    def launch_template(
+        self,
+        template_id: str,
+        overrides: dict[str, Any] | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
         """
-        Instantiate a template: create agents, apply permissions and budgets.
+        Instantiate a template inside a workspace.
+
+        Each agent is namespaced as {workspace_id}-{agent_name} to prevent
+        collisions when the same template is launched multiple times or when
+        two templates share agent role names (e.g., both have a 'scout').
+
+        Backward-compatible: if workspace_id is explicitly passed as the string
+        "global", agents are registered without namespacing (legacy behaviour).
 
         Returns a summary dict with keys:
-          template_name, template_id, agents_created, permissions_applied, budgets_applied
+          template_name, template_id, workspace_id, agents_created,
+          permissions_applied, budgets_applied
         """
         manifest = self.get_template(template_id)
 
-        # Validate required fields
         missing = [f for f in ("name", "agents", "pipeline") if f not in manifest]
         if missing:
             raise ValueError(f"Template '{template_id}' missing required fields: {missing}")
 
         overrides = overrides or {}
-        agent_overrides: dict[str, Any] = overrides.get("agents", {})
+        global_mode = workspace_id == "global"
 
+        # Auto-create workspace unless caller passed one or requested global mode
+        if workspace_id is None:
+            workspace_name = overrides.get("workspace_name") or f"{template_id}-launch"
+            workspace_id = self.create_workspace(template_id, name=workspace_name)
+        elif not global_mode:
+            # Verify the workspace exists
+            self.get_workspace(workspace_id)
+
+        agent_overrides: dict[str, Any] = overrides.get("agents", {})
         template_dir = self.apex_home / "templates" / template_id
         agents_dir = template_dir / "agents"
 
@@ -970,20 +1079,28 @@ class ApexKernel:
         budgets_applied = 0
 
         for agent_cfg in manifest.get("agents", []):
-            agent_id = str(agent_cfg.get("name") or "").strip()
-            if not agent_id:
+            template_agent_name = str(agent_cfg.get("name") or "").strip()
+            if not template_agent_name:
                 continue
 
-            # Merge per-agent overrides
-            if agent_id in agent_overrides:
-                agent_cfg = {**agent_cfg, **agent_overrides[agent_id]}
+            # Namespace agent unless in global (legacy) mode
+            agent_id = (
+                template_agent_name
+                if global_mode
+                else f"{workspace_id}-{template_agent_name}"
+            )
 
-            agent_dir = agents_dir / agent_id
+            # Merge per-agent overrides (keyed by template agent name)
+            if template_agent_name in agent_overrides:
+                agent_cfg = {**agent_cfg, **agent_overrides[template_agent_name]}
+
+            # Agent files always live in the template directory (shared, read-only)
+            agent_dir = agents_dir / template_agent_name
             agent_dir.joinpath("constraints").mkdir(parents=True, exist_ok=True)
             agent_dir.joinpath("workspace").mkdir(parents=True, exist_ok=True)
 
             agent_json = {
-                "name": agent_id,
+                "name": template_agent_name,
                 "role": agent_cfg.get("role", "custom"),
                 "description": agent_cfg.get("description", ""),
                 "model": agent_cfg.get("model", {"primary": "qwen3.5-apex", "fallback": "claude-sonnet"}),
@@ -994,7 +1111,6 @@ class ApexKernel:
                 "api_config": agent_cfg.get("api_config", {"think": False, "num_ctx": 4096, "temperature": 0.3}),
             }
 
-            # Write files only if they don't already exist
             agent_json_path = agent_dir / "agent.json"
             if not agent_json_path.exists():
                 agent_json_path.write_text(json.dumps(agent_json, indent=2) + "\n")
@@ -1010,24 +1126,34 @@ class ApexKernel:
             if not scratch.exists():
                 scratch.write_text("")
 
-            # Register agent (INSERT OR IGNORE — skip if already in DB)
+            meta = {
+                "paused": False,
+                "config_path": str(agent_json_path),
+                "template_id": template_id,
+                "template_agent_name": template_agent_name,
+                "workspace_id": workspace_id if not global_mode else None,
+            }
+            ws_col = None if global_mode else workspace_id
+
             with self._connect() as conn:
                 cur = conn.execute(
                     """
-                    INSERT OR IGNORE INTO agent_status (agent_name, status, model_active, meta)
-                    VALUES (?, 'idle', ?, ?)
+                    INSERT OR IGNORE INTO agent_status
+                        (agent_name, status, model_active, meta, workspace_id)
+                    VALUES (?, 'idle', ?, ?, ?)
                     """,
                     (
                         agent_id,
                         agent_json["model"].get("primary", "qwen3.5-apex"),
-                        json.dumps({"paused": False, "config_path": str(agent_json_path)}),
+                        json.dumps(meta),
+                        ws_col,
                     ),
                 )
                 conn.commit()
                 if cur.rowcount > 0:
                     agents_created.append(agent_id)
 
-            # Apply default_permissions from manifest to this agent
+            # Apply default_permissions
             default_perms = manifest.get("default_permissions", {})
             if isinstance(default_perms, dict):
                 for category, resources in default_perms.items():
@@ -1035,28 +1161,92 @@ class ApexKernel:
                         for resource_key, perm_value in resources.items():
                             resource = f"{category}.{resource_key}"
                             level, requires_approval = self._map_template_permission(perm_value)
-                            self.set_permission(agent_id, resource, level, requires_approval=requires_approval)
+                            self._set_permission_ws(
+                                agent_id, resource, level,
+                                requires_approval=requires_approval,
+                                workspace_id=ws_col,
+                            )
                             permissions_applied += 1
 
-            # Apply default_budgets if present
+            # Apply default_budgets
             for budget_type, budget_cfg in manifest.get("default_budgets", {}).items():
                 if isinstance(budget_cfg, dict):
-                    self.set_budget(
+                    self._set_budget_ws(
                         agent_id,
                         budget_type,
                         float(budget_cfg.get("limit", 100.0)),
                         period=budget_cfg.get("period", "daily"),
                         alert_threshold=float(budget_cfg.get("alert_threshold", 0.8)),
+                        workspace_id=ws_col,
                     )
                     budgets_applied += 1
 
         return {
             "template_name": manifest["name"],
             "template_id": template_id,
+            "workspace_id": workspace_id,
             "agents_created": agents_created,
             "permissions_applied": permissions_applied,
             "budgets_applied": budgets_applied,
         }
+
+    def _set_permission_ws(
+        self,
+        agent_id: str,
+        resource: str,
+        level: str,
+        max_spend_per_day: float | None = None,
+        requires_approval: bool = False,
+        workspace_id: str | None = None,
+    ) -> None:
+        """Internal upsert that propagates workspace_id to the permissions row."""
+        self._ensure_agent_exists(agent_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO permissions
+                    (agent_id, resource, level, max_spend_per_day, requires_approval, workspace_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(agent_id, resource) DO UPDATE SET
+                    level = excluded.level,
+                    max_spend_per_day = excluded.max_spend_per_day,
+                    requires_approval = excluded.requires_approval,
+                    workspace_id = excluded.workspace_id
+                """,
+                (agent_id, resource, level, max_spend_per_day, int(requires_approval), workspace_id),
+            )
+            conn.commit()
+
+    def _set_budget_ws(
+        self,
+        agent_id: str,
+        budget_type: str,
+        limit_amount: float,
+        period: str = "daily",
+        alert_threshold: float = 0.8,
+        workspace_id: str | None = None,
+    ) -> None:
+        """Internal upsert that propagates workspace_id to the budgets row."""
+        self._ensure_agent_exists(agent_id)
+        if limit_amount <= 0:
+            raise ValueError("limit_amount must be positive.")
+        if not (0 < alert_threshold <= 1):
+            raise ValueError("alert_threshold must be between 0 and 1.")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO budgets
+                    (agent_id, budget_type, limit_amount, period, alert_threshold, workspace_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(agent_id, budget_type) DO UPDATE SET
+                    limit_amount = excluded.limit_amount,
+                    period = excluded.period,
+                    alert_threshold = excluded.alert_threshold,
+                    workspace_id = excluded.workspace_id
+                """,
+                (agent_id, budget_type, float(limit_amount), period, float(alert_threshold), workspace_id),
+            )
+            conn.commit()
 
     def _map_template_permission(self, value: str) -> tuple[str, bool]:
         """Map a human-readable template permission descriptor to (level, requires_approval)."""
@@ -1072,6 +1262,73 @@ class ApexKernel:
             "draft": ("draft", False),
         }
         return mapping.get(str(value).strip(), ("read_only", False))
+
+    def _migrate(self) -> None:
+        """Apply incremental schema migrations to the live database."""
+        _WORKSPACE_TABLE = """
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """
+        _WORKSPACE_IDX = (
+            "CREATE INDEX IF NOT EXISTS idx_workspaces_template ON workspaces(template_id)"
+        )
+        _NEW_COLS: dict[str, list[str]] = {
+            "agent_status": ["workspace_id TEXT"],
+            "tasks": ["workspace_id TEXT"],
+            "agent_messages": ["workspace_id TEXT"],
+            "reviews": ["workspace_id TEXT"],
+            "evals": ["workspace_id TEXT"],
+            "permissions": ["workspace_id TEXT"],
+            "budgets": ["workspace_id TEXT"],
+            "tool_grants": ["workspace_id TEXT"],
+        }
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(_WORKSPACE_TABLE)
+            conn.execute(_WORKSPACE_IDX)
+            for table, columns in _NEW_COLS.items():
+                for col_def in columns:
+                    col_name = col_def.split()[0]
+                    try:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+                    except sqlite3.OperationalError:
+                        pass  # Column already exists
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _resolve_agent_config_path(self, agent_id: str) -> Path | None:
+        """
+        Return the Path to agent.json for agent_id.
+
+        For workspace-namespaced agents (e.g. ws-abc123-scout), the agent files
+        live in the template directory, not under the namespaced name. The actual
+        path is stored in agent_status.meta['config_path'].
+
+        Falls back to self.agents_dir / agent_id / agent.json for global agents.
+        """
+        # Fast path: direct file exists (global, un-namespaced agent)
+        direct = self.agents_dir / agent_id / "agent.json"
+        if direct.exists():
+            return direct
+
+        # Look up meta for workspace-scoped agents
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT meta FROM agent_status WHERE agent_name = ?", (agent_id,)
+            ).fetchone()
+        if not row:
+            return None
+        meta = self._load_json(row["meta"])
+        config_path = meta.get("config_path")
+        if config_path:
+            return Path(config_path)
+        return None
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
