@@ -194,41 +194,39 @@ def generate_queries(task_text):
 try:
     import sqlite3 as _sqlite3
     from kernel.evidence import EvidenceStore
+    from kernel.api import ApexKernel
     _ev = EvidenceStore(db_path)
+    _k = ApexKernel()
 
-    # 1. Same-task evidence (e.g. agent already ran search on this task)
+    # 1. Same-task evidence (fastest path — reuse without any search)
     if _ev.get_evidence(task_id):
         print(_ev.format_for_prompt(task_id))
         sys.exit(0)
 
-    # 2. Workspace-level evidence inheritance: find the most recent evidence
-    #    stored by any agent in the same workspace (agent_id prefix matches).
-    #    e.g. agent ws-abc123-writer inherits ws-abc123-scout's evidence.
-    _ws_prefix = agent_name.rsplit('-', 1)[0]  # ws-abc123-scout → ws-abc123
-    if _ws_prefix.startswith('ws-'):
-        _conn = _sqlite3.connect(db_path)
-        _row = _conn.execute(
-            """SELECT task_id FROM evidence
-               WHERE agent_id LIKE ? AND task_id != ?
-               ORDER BY created_at DESC LIMIT 1""",
-            (_ws_prefix + '-%', task_id),
-        ).fetchone()
-        _conn.close()
-        if _row:
-            _inherited_tid = _row[0]
-            if _ev.get_evidence(_inherited_tid):
-                print(_ev.format_for_prompt(_inherited_tid))
-                sys.exit(0)
+    # 2. Check tool grant: agents WITH search capability run new searches;
+    #    agents WITHOUT it (Writer, Analyst) inherit workspace evidence instead.
+    _tools = _k.get_agent_tools(agent_name)
+    has_search = any(t.get('tool_id') == 'web_search' or t.get('name') == 'web_search' for t in _tools)
 
-    from kernel.api import ApexKernel
-    k = ApexKernel()
-    tools = k.get_agent_tools(agent_name)
-    has_search = any(t.get('tool_id') == 'web_search' or t.get('name') == 'web_search' for t in tools)
     if not has_search:
+        # Workspace inheritance: find most recent evidence from any sibling agent
+        _ws_prefix = agent_name.rsplit('-', 1)[0]  # ws-abc-writer → ws-abc
+        if _ws_prefix.startswith('ws-'):
+            _conn = _sqlite3.connect(db_path)
+            _row = _conn.execute(
+                """SELECT task_id FROM evidence
+                   WHERE agent_id LIKE ? AND task_id != ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (_ws_prefix + '-%', task_id),
+            ).fetchone()
+            _conn.close()
+            if _row and _ev.get_evidence(_row[0]):
+                print(_ev.format_for_prompt(_row[0]))
+                sys.exit(0)
         print('## Search Evidence\n(none available)')
         sys.exit(0)
-    import sqlite3
-    conn = sqlite3.connect(db_path)
+    # Agent has search grant — run multi-query searches
+    conn = _sqlite3.connect(db_path)
     row = conn.execute('SELECT title, description FROM tasks WHERE id=?', (task_id,)).fetchone()
     conn.close()
     if not row or not row[0]:
@@ -238,8 +236,7 @@ try:
     task_text = (title + '. ' + (description or '')).strip()
     queries = generate_queries(task_text)
     from kernel.tool_adapter import execute_tool
-    from kernel.evidence import EvidenceStore
-    ev = EvidenceStore(db_path)
+    ev = _ev  # reuse already-initialised EvidenceStore
     seen_urls = set()
     any_results = False
     for query in queries:
