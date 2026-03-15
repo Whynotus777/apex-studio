@@ -133,7 +133,7 @@ def _agent_role_icon(agent_name: str) -> str:
 
 # ── Task-chain helpers ───────────────────────────────────────────────────────
 
-_MAX_CHAIN_HOPS: int = 2
+_MAX_CHAIN_HOPS: int = 3
 
 # All role names that can be auto-chained (template names, not workspace-scoped)
 _CHAIN_TARGETS: set[str] = {"analyst", "builder", "writer", "critic"}
@@ -250,7 +250,7 @@ async def _handle_critic_chain(
         pass  # already queued — that's fine
 
     try:
-        results = kernel.run_critic_pipeline()
+        results = await asyncio.get_event_loop().run_in_executor(None, kernel.run_critic_pipeline)
     except Exception as exc:
         if emit_message:
             await _safe_reply(message, f"⚠️ Critic pipeline failed: {exc}")
@@ -980,6 +980,7 @@ async def task_command(update: Update, context: Any) -> None:
     current_agent = agent_id
     chain_log: list[dict[str, Any]] = []
     writer_preview = ""
+    _operator_card_sent = False
     loop = asyncio.get_event_loop()
     for hop in range(1, _MAX_CHAIN_HOPS + 1):
         print(f"[DEBUG] spawn start: agent={current_agent} task={task_id} hop={hop}", flush=True)
@@ -1020,11 +1021,13 @@ async def task_command(update: Update, context: Any) -> None:
         })
 
         if not is_content_engine:
-            await _safe_reply(
-                update.message,
-                _format_task_card(current_agent, response, task_id, workspace_id, template_id=template_id),
-                parse_mode="Markdown",
-            )
+            try:
+                card = _format_task_card(current_agent, response, task_id, workspace_id, template_id=template_id)
+                print(f"[DEBUG] sending card ({len(card)} chars): {card[:80]!r}", flush=True)
+                await _safe_reply(update.message, card, parse_mode="Markdown")
+            except Exception as exc:
+                print(f"[DEBUG] card send failed: {exc}", flush=True)
+                await _safe_reply(update.message, f"Agent {current_agent} done — status: {response.get('status')}")
 
         # Auto-chain: follow messages to next agent (capped at MAX_CHAIN_HOPS)
         if hop < _MAX_CHAIN_HOPS:
@@ -1056,10 +1059,15 @@ async def task_command(update: Update, context: Any) -> None:
                                     InlineKeyboardButton("✏️ Edit", callback_data=f"edit_review:{review_id}"),
                                     InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
                                 ]])
-                            await update.message.reply_text(
-                                _content_engine_operator_card(task_id, chain_log, writer_preview),
-                                reply_markup=reply_markup,
-                            )
+                            try:
+                                card = _content_engine_operator_card(task_id, chain_log, writer_preview)
+                                print(f"[DEBUG] operator card ({len(card)} chars): {card[:120]!r}", flush=True)
+                                await update.message.reply_text(card, reply_markup=reply_markup)
+                                _operator_card_sent = True
+                            except Exception as exc:
+                                print(f"[DEBUG] operator card send failed: {exc}", flush=True)
+                                await _safe_reply(update.message, _chain_summary(chain_log))
+                                _operator_card_sent = True
                     break
                 if not is_content_engine:
                     await _safe_reply(
@@ -1075,6 +1083,13 @@ async def task_command(update: Update, context: Any) -> None:
             update.message,
             "🔗 Chain Summary\n" + _chain_summary(chain_log),
         )
+    elif chain_log and is_content_engine and not _operator_card_sent:
+        # Chain ended before Critic — send what we have so the user isn't left hanging
+        print(f"[DEBUG] content-engine chain ended without operator card, sending fallback", flush=True)
+        fallback = _chain_summary(chain_log)
+        if writer_preview:
+            fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
+        await _safe_reply(update.message, fallback)
 
 
 async def approvals_command(update: Update, context: Any) -> None:
