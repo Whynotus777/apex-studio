@@ -7,12 +7,22 @@ APEX_HOME="${APEX_HOME:-$HOME/apex-studio}"
 DB="$APEX_HOME/db/apex_state.db"
 AGENT_NAME="${1:?Usage: spawn-agent.sh <agent_name> [task_id]}"
 TASK_ID="${2:-}"
-AGENT_DIR="$APEX_HOME/templates/startup-chief-of-staff/agents/$AGENT_NAME"
-WORKSPACE="$APEX_HOME/templates/startup-chief-of-staff/workspace"
 TMP_DIR=$(mktemp -d)
 
+# Resolve AGENT_DIR: workspace-scoped agents store real path in meta.config_path
+_CONFIG_PATH=$(sqlite3 "$APEX_HOME/db/apex_state.db" \
+  "SELECT json_extract(meta,'$.config_path') FROM agent_status WHERE agent_name='$AGENT_NAME';" 2>/dev/null)
+
+if [ -n "$_CONFIG_PATH" ] && [ -f "$_CONFIG_PATH" ]; then
+  AGENT_DIR=$(dirname "$_CONFIG_PATH")
+else
+  AGENT_DIR="$APEX_HOME/templates/startup-chief-of-staff/agents/$AGENT_NAME"
+fi
+
+WORKSPACE="$APEX_HOME/templates/startup-chief-of-staff/workspace"
+
 if [ ! -d "$AGENT_DIR" ]; then
-  echo "ERROR: Agent '$AGENT_NAME' not found" >&2
+  echo "ERROR: Agent '$AGENT_NAME' not found (looked in $AGENT_DIR)" >&2
   exit 1
 fi
 
