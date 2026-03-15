@@ -134,14 +134,18 @@ def _list_agent_names() -> list[str]:
     rows = kernel._fetch_all("SELECT agent_name FROM agent_status ORDER BY agent_name ASC")
     return [row["agent_name"] for row in rows]
 
-
-def _workspace_origin(meta: dict[str, Any]) -> str:
-    config_path = str(meta.get("config_path", ""))
-    marker = "/templates/"
-    if marker in config_path:
-        tail = config_path.split(marker, 1)[1]
-        return tail.split("/", 1)[0]
-    return "manual"
+def _list_agent_rows(workspace_id: str | None = None) -> list[dict[str, Any]]:
+    if workspace_id:
+        return kernel._fetch_all(
+            """
+            SELECT agent_name
+            FROM agent_status
+            WHERE workspace_id = ?
+            ORDER BY agent_name ASC
+            """,
+            (workspace_id,),
+        )
+    return kernel._fetch_all("SELECT agent_name FROM agent_status ORDER BY agent_name ASC")
 
 
 async def start_command(update: Update, context: Any) -> None:
@@ -151,7 +155,7 @@ async def start_command(update: Update, context: Any) -> None:
         "APEX Venture Studio online.\n\n"
         "Send any message and I'll route it.\n"
         "Commands:\n"
-        "/agents — Agent roster with status and model\n"
+        "/agents [workspace_id] — Agent roster with status and model\n"
         "/status — Alias for /agents\n"
         "/goals — Active goals\n"
         "/tasks — Pending tasks\n"
@@ -167,14 +171,30 @@ async def agents_command(update: Update, context: Any) -> None:
     if not is_authorized(update.effective_chat.id):
         return
 
-    lines = ["🤖 *Agents*\n"]
-    for agent_id in _list_agent_names():
+    workspace_id = context.args[0] if getattr(context, "args", None) else None
+    agent_rows = _list_agent_rows(workspace_id)
+    if not agent_rows:
+        if workspace_id:
+            await update.message.reply_text(f"No agents found for workspace `{workspace_id}`.", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("No agents found.")
+        return
+
+    heading = "🤖 *Agents*\n"
+    if workspace_id:
+        heading = f"🤖 *Agents* `{workspace_id}`\n"
+
+    lines = [heading]
+    for row in agent_rows:
+        agent_id = row["agent_name"]
         agent = _agent_status_summary(agent_id)
         hb = agent.get("last_heartbeat") or "never"
         model = agent.get("model_active") or "unknown"
+        ws = agent.get("workspace_id") or "global"
         lines.append(
             f"{_icon_for_status(agent['status'])} *{agent_id}* — {agent['status']}\n"
             f"    Model: {model}\n"
+            f"    Workspace: {ws}\n"
             f"    Last active: {hb}\n"
             f"    Open tasks: {agent.get('task_count', 0)}"
         )
@@ -224,6 +244,7 @@ async def launch_command(update: Update, context: Any) -> None:
         "🚀 *Template Launched*",
         "",
         f"Template: *{result.get('template_name', template_id)}*",
+        f"Workspace: `{result.get('workspace_id', 'global')}`",
         f"Agents created: {', '.join(result.get('agents_created', [])) or 'none'}",
         f"Permissions applied: {result.get('permissions_applied', 0)}",
         f"Budgets applied: {result.get('budgets_applied', 0)}",
@@ -250,22 +271,19 @@ async def workspaces_command(update: Update, context: Any) -> None:
     if not is_authorized(update.effective_chat.id):
         return
 
-    rows = kernel._fetch_all("SELECT agent_name, status, meta FROM agent_status ORDER BY agent_name ASC")
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        meta = json.loads(row["meta"]) if row.get("meta") else {}
-        grouped.setdefault(_workspace_origin(meta), []).append(row)
-
-    if not grouped:
+    workspaces = kernel.list_workspaces()
+    if not workspaces:
         await update.message.reply_text("No active workspaces.")
         return
 
     lines = ["🗂️ *Workspaces*\n"]
-    for workspace_id, agents in sorted(grouped.items()):
-        active = sum(1 for agent in agents if agent["status"] == "active")
+    for workspace in workspaces:
+        ws_detail = kernel.get_workspace(workspace["id"])
+        active = sum(1 for agent in ws_detail.get("agents", []) if agent["status"] == "active")
         lines.append(
-            f"*{workspace_id}*\n"
-            f"    Agents: {len(agents)} | Active: {active} | Members: {', '.join(a['agent_name'] for a in agents)}"
+            f"*{workspace['id']}* — {workspace.get('name', workspace['id'])}\n"
+            f"    Template: {workspace.get('template_id', 'unknown')} | Status: {workspace.get('status', 'unknown')}\n"
+            f"    Agents: {workspace.get('agent_count', 0)} | Active: {active}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
