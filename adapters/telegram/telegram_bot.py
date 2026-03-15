@@ -108,21 +108,32 @@ def _icon_for_status(status: str) -> str:
 
 # ── Task-chain helpers ───────────────────────────────────────────────────────
 
-_CHAIN_TARGETS: set[str] = {"analyst", "builder"}
 _MAX_CHAIN_HOPS: int = 2
+
+# All role names that can be auto-chained (template names, not workspace-scoped)
+_CHAIN_TARGETS: set[str] = {"analyst", "builder", "writer", "critic"}
 
 
 def _next_chain_agent(workspace_id: str, messages: list[dict[str, Any]]) -> str | None:
-    """Return the workspace-namespaced agent to auto-spawn next, or None."""
+    """
+    Return the workspace-namespaced agent to auto-spawn next, or None.
+
+    Agent messages use template role names (e.g. 'writer', 'analyst'), not
+    workspace-scoped names (e.g. 'ws-abc-writer'). We resolve by checking
+    whether {workspace_id}-{role} exists in agent_status.
+    """
     for msg in messages:
-        target = msg.get("to", "").lower()
-        if target in _CHAIN_TARGETS:
-            agent_id = f"{workspace_id}-{target}"
-            rows = kernel._fetch_all(
-                "SELECT agent_name FROM agent_status WHERE agent_name = ?", (agent_id,)
-            )
-            if rows:
-                return agent_id
+        target = msg.get("to", "").lower().strip()
+        # Strip any workspace prefix so bare role names and scoped names both work
+        role = target.split("-")[-1] if "-" in target else target
+        if role not in _CHAIN_TARGETS:
+            continue
+        agent_id = f"{workspace_id}-{role}"
+        rows = kernel._fetch_all(
+            "SELECT agent_name FROM agent_status WHERE agent_name = ?", (agent_id,)
+        )
+        if rows:
+            return agent_id
     return None
 
 
@@ -282,6 +293,36 @@ def _get_or_ensure_inbox_goal() -> str | None:
         "SELECT id FROM goals WHERE status = 'active' ORDER BY created_at ASC LIMIT 1"
     )
     return rows[0]["id"] if rows else None
+
+
+_INTENT_KEYWORDS: dict[str, list[str]] = {
+    "writer":  ["draft", "write", "create", "post", "article", "content"],
+    "scout":   ["research", "find", "search", "analyze", "analyse", "investigate", "competitors"],
+    "critic":  ["review", "check", "evaluate"],
+}
+
+
+def _resolve_start_agent_by_intent(workspace_id: str, mission: str) -> str | None:
+    """
+    Route to the most appropriate agent based on intent keywords in the mission.
+    Returns workspace-scoped agent id if it exists, else None.
+    Falls back to scout if no other keyword matches and scout exists.
+    """
+    words = mission.lower().split()
+    for role, keywords in _INTENT_KEYWORDS.items():
+        if any(kw in words for kw in keywords):
+            agent_id = f"{workspace_id}-{role}"
+            rows = kernel._fetch_all(
+                "SELECT agent_name FROM agent_status WHERE agent_name = ?", (agent_id,)
+            )
+            if rows:
+                return agent_id
+    # Default: scout
+    scout_id = f"{workspace_id}-scout"
+    rows = kernel._fetch_all(
+        "SELECT agent_name FROM agent_status WHERE agent_name = ?", (scout_id,)
+    )
+    return scout_id if rows else None
 
 
 def _resolve_start_agent(workspace_id: str, template_id: str) -> str | None:
@@ -585,8 +626,9 @@ async def task_command(update: Update, context: Any) -> None:
         await update.message.reply_text(f"Failed to create task: {exc}")
         return
 
-    # Determine starting agent from template pipeline
-    agent_id = _resolve_start_agent(workspace_id, ws["template_id"])
+    # Determine starting agent: keyword routing first, then pipeline fallback
+    agent_id = _resolve_start_agent_by_intent(workspace_id, mission) \
+        or _resolve_start_agent(workspace_id, ws["template_id"])
     if not agent_id:
         await update.message.reply_text(
             f"Task `{task_id}` created but could not resolve a starting agent "
