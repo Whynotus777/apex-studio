@@ -1184,6 +1184,38 @@ class ApexKernel:
                     )
                     budgets_applied += 1
 
+        # Auto-grant tool access for integrations listed in the manifest
+        _SEARCH_GRANT_ROLES = {"scout", "analyst"}
+        all_integrations = (
+            set(manifest.get("integrations", []))
+            | set(manifest.get("optional_integrations", []))
+        )
+        tools_granted: list[str] = []
+        if "web_search" in all_integrations:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO tools
+                        (id, name, adapter, auth_method, scopes, read_write, cost_per_call, approval_required)
+                    VALUES ('web_search', 'Web Search', 'adapters.tools.web_search.search',
+                            'none', '["search","research","evidence"]', 'read_only', 0, 0)
+                    """,
+                )
+                for agent_cfg in manifest.get("agents", []):
+                    tmpl_name = str(agent_cfg.get("name") or "").strip()
+                    if tmpl_name not in _SEARCH_GRANT_ROLES:
+                        continue
+                    agent_id = tmpl_name if global_mode else f"{workspace_id}-{tmpl_name}"
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO tool_grants (agent_id, tool_id, permission_level)
+                        VALUES (?, 'web_search', 'read_only')
+                        """,
+                        (agent_id,),
+                    )
+                    tools_granted.append(agent_id)
+                conn.commit()
+
         return {
             "template_name": manifest["name"],
             "template_id": template_id,
@@ -1191,6 +1223,7 @@ class ApexKernel:
             "agents_created": agents_created,
             "permissions_applied": permissions_applied,
             "budgets_applied": budgets_applied,
+            "tools_granted": tools_granted,
         }
 
     def _set_permission_ws(

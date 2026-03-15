@@ -19,6 +19,8 @@ import subprocess
 import tempfile
 from datetime import datetime
 
+from kernel.critic_evidence import verify_agent_output
+
 APEX_HOME = os.environ.get("APEX_HOME", os.path.expanduser("~/apex-studio"))
 DB_PATH = os.path.join(APEX_HOME, "db", "apex_state.db")
 
@@ -232,6 +234,27 @@ def process_review(review, dry_run=False):
         print(f"  Grounding issues: {grounding}")
     print(f"  Feedback: {feedback[:200]}")
 
+    evidence_verification = verify_agent_output(task_id, review.get("agent_output", "") or "", DB_PATH)
+    grounding_score = float(evidence_verification.get("grounding_score", 1.0))
+    parsed["evidence_verification"] = evidence_verification
+
+    print(
+        "  Evidence grounding:"
+        f" {evidence_verification.get('verified', 0)}/{evidence_verification.get('total_citations', 0)}"
+        f" verified ({grounding_score:.2f})"
+    )
+
+    if verdict == "PASS" and grounding_score < 0.5:
+        unverified_urls = evidence_verification.get("unverified", [])
+        verdict = "REVISE"
+        feedback = (
+            f"Critic passed but evidence grounding score is {grounding_score:.2f} — "
+            f"agent cited unverified sources: {', '.join(unverified_urls)}"
+        )
+        parsed["verdict"] = verdict
+        parsed["feedback"] = feedback
+        print("  Override: PASS -> REVISE due to evidence grounding threshold")
+
     # Update review record
     db_execute("""
         UPDATE reviews SET
@@ -272,9 +295,14 @@ def process_review(review, dry_run=False):
     for dimension, score in scores.items():
         if isinstance(score, (int, float)):
             db_execute("""
-                INSERT INTO evals (task_id, agent_name, eval_layer, eval_type, dimension, score, max_score, notes)
-                VALUES (?, ?, 'critic', 'rubric', ?, ?, 5.0, ?)
-            """, [task_id, agent_name, dimension, score, verdict])
+            INSERT INTO evals (task_id, agent_name, eval_layer, eval_type, dimension, score, max_score, notes)
+            VALUES (?, ?, 'critic', 'rubric', ?, ?, 5.0, ?)
+        """, [task_id, agent_name, dimension, score, verdict])
+
+    db_execute("""
+        INSERT INTO evals (task_id, agent_name, eval_layer, eval_type, dimension, score, max_score, notes)
+        VALUES (?, ?, 'critic', 'automated', 'evidence_grounding', ?, 1.0, ?)
+    """, [task_id, agent_name, grounding_score, verdict])
 
 
 def main():

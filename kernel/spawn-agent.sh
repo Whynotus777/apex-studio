@@ -158,15 +158,39 @@ fi
     echo "No specific task. Run your heartbeat responsibilities."
   fi
 
-  # Search evidence injection
+  # Search evidence injection (multi-query)
   if [ -n "$TASK_ID" ]; then
     cat > "$TMP_DIR/search_evidence.py" << 'PYEOF'
-import sys, os
+import sys, os, urllib.request, json as _json
 apex_home = os.environ['APEX_HOME']
 db_path = os.environ['APEX_DB']
 agent_name = os.environ['APEX_AGENT']
 task_id = os.environ['APEX_TASK']
 sys.path.insert(0, apex_home)
+
+def generate_queries(task_text):
+    """Ask Qwen for 3 focused search queries."""
+    prompt = (
+        "Generate exactly 3 short web search queries (one per line, no numbering, "
+        "no extra text) for this research task:\n" + task_text
+    )
+    try:
+        payload = _json.dumps({
+            "model": "qwen3.5-apex", "prompt": prompt,
+            "think": False, "stream": False,
+            "options": {"temperature": 0.3, "num_ctx": 512}
+        }).encode()
+        req = urllib.request.Request(
+            "http://localhost:11434/api/generate", data=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            text = _json.loads(r.read()).get("response", "").strip()
+        lines = [l.strip().lstrip("•-*0123456789. ") for l in text.split("\n") if l.strip()]
+        return lines[:3] if lines else [task_text[:200]]
+    except Exception:
+        return [task_text[:200]]
+
 try:
     from kernel.api import ApexKernel
     k = ApexKernel()
@@ -183,15 +207,26 @@ try:
         print('## Search Evidence\n(none available)')
         sys.exit(0)
     title, description = row
-    query = (title + ' ' + (description or '')).strip()[:200]
+    task_text = (title + '. ' + (description or '')).strip()
+    queries = generate_queries(task_text)
     from kernel.tool_adapter import execute_tool
-    result = execute_tool('web_search', {'query': query, 'max_results': 5})
-    if result.get('status') != 'ok' or not result.get('results'):
-        print('## Search Evidence\n(none available)')
-        sys.exit(0)
     from kernel.evidence import EvidenceStore
     ev = EvidenceStore(db_path)
-    ev.store_evidence(task_id, agent_name, 'web_search', query, result['results'])
+    seen_urls = set()
+    any_results = False
+    for query in queries:
+        result = execute_tool('web_search', {'query': query, 'max_results': 5})
+        if result.get('status') != 'ok' or not result.get('results'):
+            continue
+        deduped = [r for r in result['results'] if r.get('url') not in seen_urls]
+        if not deduped:
+            continue
+        seen_urls.update(r['url'] for r in deduped)
+        ev.store_evidence(task_id, agent_name, 'web_search', query, deduped)
+        any_results = True
+    if not any_results:
+        print('## Search Evidence\n(none available)')
+        sys.exit(0)
     print(ev.format_for_prompt(task_id))
 except Exception:
     print('## Search Evidence\n(none available)')
@@ -320,9 +355,13 @@ if [ -n "$TASK_ID" ]; then
       REASON=$(echo "$PARSED" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',{}).get('reason',''))" 2>/dev/null)
       log "Task blocked: $TASK_ID — $REASON"
       ;;
+    unknown)
+      db_query "UPDATE tasks SET status='blocked' WHERE id='$TASK_ID';"
+      log "Status unknown — marking task blocked"
+      ;;
     *)
       db_query "UPDATE tasks SET checked_out_by=NULL WHERE id='$TASK_ID';"
-      log "Status unclear: $STATUS_STATE — releasing checkout"
+      log "Status unrecognized: '$STATUS_STATE' — releasing checkout"
       ;;
   esac
 fi

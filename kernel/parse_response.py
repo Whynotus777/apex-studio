@@ -188,17 +188,17 @@ def normalize_status(status_raw):
     status_str = str(status_raw).lower().strip()
 
     if "needs_review" in status_str:
-        stakes_match = re.search(r'needs_review:(\w+)', status_str)
+        stakes_match = re.search(r'needs_review:(low|medium|high)', status_str)
         stakes = stakes_match.group(1) if stakes_match else "low"
         return {"state": "needs_review", "stakes": stakes}
     elif "blocked" in status_str:
         reason_match = re.search(r'blocked:(.+?)(?:\||$)', status_str)
         reason = reason_match.group(1).strip() if reason_match else "unknown"
         return {"state": "blocked", "reason": reason}
-    elif "done" in status_str:
+    elif status_str == "done" or status_str.startswith("done"):
         return {"state": "done", "reason": ""}
     else:
-        return {"state": "unknown", "reason": status_str}
+        return {"state": "blocked", "reason": "unknown_format"}
 
 
 def parse_response(text):
