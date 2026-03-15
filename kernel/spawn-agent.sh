@@ -143,7 +143,7 @@ fi
       ALREADY_CHECKED=$(db_query "SELECT checked_out_by FROM tasks
         WHERE id='$TASK_ID' AND checked_out_by IS NOT NULL AND checked_out_by != '$AGENT_NAME';")
       if [ -n "$ALREADY_CHECKED" ]; then
-        log "ERROR: Task $TASK_ID checked out by $ALREADY_CHECKED"
+        log "ERROR: Task $TASK_ID checked out by $ALREADY_CHECKED" >&2
         db_query "UPDATE agent_status SET status='idle' WHERE agent_name='$AGENT_NAME';"
         exit 1
       fi
@@ -169,23 +169,28 @@ task_id = os.environ['APEX_TASK']
 sys.path.insert(0, apex_home)
 
 def generate_queries(task_text):
-    """Ask Qwen for 3 focused search queries."""
+    """Use the configured model to generate 3 focused search queries."""
+    import subprocess, tempfile, os
     prompt = (
         "Generate exactly 3 short web search queries (one per line, no numbering, "
         "no extra text) for this research task:\n" + task_text
     )
     try:
-        payload = _json.dumps({
-            "model": "qwen3.5-apex", "prompt": prompt,
-            "think": False, "stream": False,
-            "options": {"temperature": 0.3, "num_ctx": 512}
-        }).encode()
-        req = urllib.request.Request(
-            "http://localhost:11434/api/generate", data=payload,
-            headers={"Content-Type": "application/json"}
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as sf:
+            sf.write("You are a search query generator. Output only queries, one per line.")
+            sys_path = sf.name
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as uf:
+            uf.write(prompt)
+            usr_path = uf.name
+        result = subprocess.run(
+            ["python3", os.path.join(os.environ.get("APEX_HOME", "."), "kernel", "call_model.py"),
+             "gemini-3-flash-preview", sys_path, usr_path, "0.3"],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ}
         )
-        with urllib.request.urlopen(req, timeout=30) as r:
-            text = _json.loads(r.read()).get("response", "").strip()
+        os.unlink(sys_path)
+        os.unlink(usr_path)
+        text = result.stdout.strip()
         lines = [l.strip().lstrip("•-*0123456789. ") for l in text.split("\n") if l.strip()]
         return lines[:3] if lines else [task_text[:200]]
     except Exception:

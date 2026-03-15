@@ -575,8 +575,8 @@ def _get_or_ensure_inbox_goal() -> str | None:
 
 
 _INTENT_KEYWORDS: dict[str, list[str]] = {
+    "scout":   ["research", "find", "search", "analyze", "analyse", "investigate", "competitors", "trends", "trending"],
     "writer":  ["draft", "write", "create", "post", "article", "content"],
-    "scout":   ["research", "find", "search", "analyze", "analyse", "investigate", "competitors"],
     "critic":  ["review", "check", "evaluate"],
 }
 
