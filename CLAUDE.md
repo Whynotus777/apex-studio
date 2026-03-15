@@ -12,41 +12,47 @@ The system has four layers:
 
 Currently everything lives flat in the repo from the initial build. The next refactor will organize into this structure.
 
-## Current Repo Structure
+## Repo Structure
 ```
 ~/apex-studio/
-├── agents/           # Agent configs (5 agents: apex, scout, analyst, builder, critic)
-│   └── <agent>/
-│       ├── agent.json          # Model routing, heartbeat, capabilities
-│       ├── AGENTS.md           # Identity and job description
-│       ├── constraints/        # hard-rules.md, soft-preferences.md, anti-patterns.md
-│       └── workspace/          # scratchpad.md
-├── db/
-│   ├── apex_state.db           # SQLite: 8 tables (goals, projects, tasks, agent_messages, agent_status, agent_sessions, reviews, evals)
-│   ├── schema.sql              # Table definitions with indexes
-│   └── seed.sql                # Initial goals, projects, agent status
-├── services/
+├── kernel/                     # Runtime engine
 │   ├── spawn-agent.sh          # Core spawn protocol (context injection → model call → parse → persist)
 │   ├── call_model.py           # Ollama and Claude API caller (reads prompts from temp files)
 │   ├── parse_response.py       # JSON parser with text fallback, message allowlist, status normalization
 │   ├── run_critic.py           # Critic pipeline (reads review queue, scores, verdicts)
-│   ├── telegram_bot.py         # Bidirectional Telegram interface
-│   ├── send_telegram.py        # Outbound message CLI
 │   ├── heartbeat.sh            # Cron wrapper for scheduled agent wakeups
 │   ├── trigger_critic.sh       # CLI wrapper for running Critic
-│   ├── crontab                 # Heartbeat schedule (installed via `crontab services/crontab`)
+│   └── crontab                 # Heartbeat schedule (installed via `crontab kernel/crontab`)
+├── templates/
+│   └── startup-chief-of-staff/
+│       ├── agents/             # Agent configs (5 agents: apex, scout, analyst, builder, critic)
+│       │   └── <agent>/
+│       │       ├── agent.json          # Model routing, heartbeat, capabilities
+│       │       ├── AGENTS.md           # Identity and job description
+│       │       ├── constraints/        # hard-rules.md, soft-preferences.md, anti-patterns.md
+│       │       └── workspace/          # scratchpad.md
+│       └── workspace/
+│           ├── AGENTS.md               # System-wide operating rules
+│           ├── SOUL.md                 # Personality and voice
+│           ├── USER.md                 # Abdul's operator profile
+│           ├── MEMORY.md               # Shared long-term memory (Apex writes)
+│           └── HEARTBEAT.md            # Schedule reference
+├── adapters/
+│   └── telegram/
+│       ├── telegram_bot.py     # Bidirectional Telegram interface
+│       └── send_telegram.py    # Outbound message CLI
+├── tests/
 │   ├── test_spawn.sh           # Spawn protocol test
 │   ├── test_parser.sh          # Parser unit tests
 │   ├── test_json_output.sh     # JSON output integration test
 │   ├── test_grounding.sh       # Scout + Analyst grounding tests
 │   └── test_critic.sh          # Full Critic pipeline test
-├── workspace/
-│   ├── AGENTS.md               # System-wide operating rules
-│   ├── SOUL.md                 # Personality and voice
-│   ├── USER.md                 # Abdul's operator profile
-│   ├── MEMORY.md               # Shared long-term memory (Apex writes)
-│   └── HEARTBEAT.md            # Schedule reference
-├── skills/                     # Shared skill library (empty)
+├── ui/                         # Product frontend (stub)
+├── docs/                       # Architecture docs
+├── db/
+│   ├── apex_state.db           # SQLite: 8 tables (goals, projects, tasks, agent_messages, agent_status, agent_sessions, reviews, evals)
+│   ├── schema.sql              # Table definitions with indexes
+│   └── seed.sql                # Initial goals, projects, agent status
 ├── .env                        # API keys and config (not committed)
 ├── .env.example                # Template for .env
 └── .gitignore
@@ -117,22 +123,22 @@ Valid message targets: `apex`, `scout`, `analyst`, `builder`, `critic`. Messages
 export $(grep -v '^#' .env | xargs)
 
 # Parser unit tests (instant)
-./services/test_parser.sh
+./tests/test_parser.sh
 
 # Spawn test with JSON output (~1-2 min on CPU)
-./services/test_json_output.sh
+./tests/test_json_output.sh
 
 # Grounding tests for Scout + Analyst (~3-4 min)
-./services/test_grounding.sh
+./tests/test_grounding.sh
 
 # Full Critic pipeline test (~3-4 min)
-./services/test_critic.sh
+./tests/test_critic.sh
 ```
 
 ## Running the Telegram Bot
 ```bash
 export $(grep -v '^#' .env | xargs)
-python3 services/telegram_bot.py
+python3 adapters/telegram/telegram_bot.py
 ```
 Commands: `/start`, `/status`, `/goals`, `/tasks`, `/rollup`, `/spawn <agent>`
 

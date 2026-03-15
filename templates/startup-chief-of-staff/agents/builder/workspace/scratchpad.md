@@ -28,3 +28,15 @@ No PE tools exist yet. Ingestion must precede valuation models. Code is PROPOSED
 
 --- sess-builder-1773543600 | 2026-03-14 23:01:06 | Task: heartbeat ---
 Scout is blocked from live web search. Cannot verify external data formats without direct access to Perplexica or similar tools.
+
+--- sess-builder-1773550732 | 2026-03-15 01:00:07 | Task: test-json-001 ---
+Scout confirmed inability to access PitchBook/Crunchbase proprietary schemas; will use standard public fields for validation. Task requires strict JSON output with no markdown or extra text.
+
+--- sess-builder-1773551132 | 2026-03-15 01:06:44 | Task: critic-test-001 ---
+Task 'critic-test-001' requires building a PE deal analysis tool. Must adhere to hard rules (no main pushes, no secret storage, etc.).
+
+--- sess-builder-1773551854 | 2026-03-15 01:18:36 | Task: test-json-001 ---
+Task json-001 completed. Ready for next instruction.
+
+--- sess-builder-1773552225 | 2026-03-15 01:25:00 | Task: critic-test-001 ---
+Task 'critic-test-001' is a diagnostic check. The actual coding task ('Build the #1 PE deal analysis tool') has not yet begun. Waiting for critic confirmation.

@@ -6,9 +6,9 @@ Tries JSON first. Falls back to text parsing if the model didn't produce valid J
 Returns a normalized JSON object regardless of input format.
 
 Usage:
-  python3 services/parse_response.py <response_file>
+  python3 kernel/parse_response.py <response_file>
   OR
-  echo "$RESPONSE" | python3 services/parse_response.py -
+  echo "$RESPONSE" | python3 kernel/parse_response.py -
 
 Output: JSON to stdout with keys:
   actions_taken, observations, proposed_output, messages[], scratchpad_update, status

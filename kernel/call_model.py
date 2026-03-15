@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 APEX Model Caller — Handles Ollama and Claude API calls cleanly.
-Usage: python3 services/call_model.py <model> <system_prompt_file> <user_prompt_file>
+Usage: python3 kernel/call_model.py <model> <system_prompt_file> <user_prompt_file>
 
 Reads prompts from files to avoid shell escaping nightmares.
 """

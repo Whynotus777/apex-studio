@@ -9,7 +9,7 @@ APEX Critic Pipeline — Processes the review queue.
 5. Updates review record and task status
 6. For HIGH stakes: flags for Abdul approval (does not auto-pass)
 
-Usage: python3 services/run_critic.py [--dry-run]
+Usage: python3 kernel/run_critic.py [--dry-run]
 """
 import os
 import sys
@@ -65,7 +65,7 @@ def build_critic_prompt(review):
     goal_name = review["goal_name"] or "(no goal)"
 
     # Load critic hard rules
-    rules_path = os.path.join(APEX_HOME, "agents", "critic", "constraints", "hard-rules.md")
+    rules_path = os.path.join(APEX_HOME, "templates", "startup-chief-of-staff", "agents", "critic", "constraints", "hard-rules.md")
     hard_rules = ""
     if os.path.exists(rules_path):
         with open(rules_path) as f:
@@ -140,7 +140,7 @@ def call_critic(system_prompt, user_prompt):
         # Determine model based on stakes (for now, always local)
         model = "qwen3.5-apex"
         result = subprocess.run(
-            ["python3", os.path.join(APEX_HOME, "services", "call_model.py"),
+            ["python3", os.path.join(APEX_HOME, "kernel", "call_model.py"),
              model, sys_path, usr_path, "0.1"],
             capture_output=True, text=True, timeout=300
         )

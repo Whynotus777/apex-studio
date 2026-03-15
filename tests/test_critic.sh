@@ -21,7 +21,7 @@ sqlite3 "$APEX_HOME/db/apex_state.db" "INSERT INTO tasks
   'build', 'builder', 'backlog');"
 
 echo "  Spawning Builder on critic-test-001..."
-"$APEX_HOME/services/spawn-agent.sh" builder critic-test-001
+"$APEX_HOME/kernel/spawn-agent.sh" builder critic-test-001
 
 echo ""
 echo "--- Step 2: Check review queue ---"
@@ -40,7 +40,7 @@ fi
 
 echo ""
 echo "--- Step 3: Run Critic pipeline ---"
-python3 "$APEX_HOME/services/run_critic.py"
+python3 "$APEX_HOME/kernel/run_critic.py"
 
 echo ""
 echo "--- Step 4: Post-Critic state ---"

@@ -1,0 +1,12 @@
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin
+APEX_HOME=/Users/abdulmanan/apex-studio
+
+# Morning rollup — 8:00 AM EST (Apex)
+0 8 * * * cd $APEX_HOME && export $(grep -v '^#' .env | xargs) && ./kernel/heartbeat.sh apex >> kernel/heartbeat.log 2>&1
+
+# Scout scan — every 4 hours
+0 */4 * * * cd $APEX_HOME && export $(grep -v '^#' .env | xargs) && ./kernel/heartbeat.sh scout >> kernel/heartbeat.log 2>&1
+
+# Builder nightly — 11:00 PM EST
+0 23 * * * cd $APEX_HOME && export $(grep -v '^#' .env | xargs) && ./kernel/heartbeat.sh builder >> kernel/heartbeat.log 2>&1

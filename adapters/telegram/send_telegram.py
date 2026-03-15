@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Send a message to Abdul via Telegram. Used by spawn-agent.sh.
-Usage: python3 services/send_telegram.py "message text" [--buttons '[[{"text":"Approve","data":"approve:task-1"}]]']
+Usage: python3 adapters/telegram/send_telegram.py "message text" [--buttons '[[{"text":"Approve","data":"approve:task-1"}]]']
 """
 import os
 import sys

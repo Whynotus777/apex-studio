@@ -1,14 +1,14 @@
 #!/bin/bash
 # spawn-agent.sh — Boot an APEX agent with context injection
-# Usage: ./services/spawn-agent.sh <agent_name> [task_id]
+# Usage: ./kernel/spawn-agent.sh <agent_name> [task_id]
 set -e
 
 APEX_HOME="${APEX_HOME:-$HOME/apex-studio}"
 DB="$APEX_HOME/db/apex_state.db"
 AGENT_NAME="${1:?Usage: spawn-agent.sh <agent_name> [task_id]}"
 TASK_ID="${2:-}"
-AGENT_DIR="$APEX_HOME/agents/$AGENT_NAME"
-WORKSPACE="$APEX_HOME/workspace"
+AGENT_DIR="$APEX_HOME/templates/startup-chief-of-staff/agents/$AGENT_NAME"
+WORKSPACE="$APEX_HOME/templates/startup-chief-of-staff/workspace"
 TMP_DIR=$(mktemp -d)
 
 if [ ! -d "$AGENT_DIR" ]; then
@@ -127,7 +127,7 @@ TEMPERATURE=$(get_json_field "api_config.temperature")
 
 log "Calling model: $MODEL_PRIMARY (prompt: $(wc -c < "$TMP_DIR/system_prompt.txt") + $(wc -c < "$TMP_DIR/user_prompt.txt") bytes)"
 
-RESPONSE=$(python3 "$APEX_HOME/services/call_model.py" \
+RESPONSE=$(python3 "$APEX_HOME/kernel/call_model.py" \
   "$MODEL_PRIMARY" \
   "$TMP_DIR/system_prompt.txt" \
   "$TMP_DIR/user_prompt.txt" \
@@ -138,7 +138,7 @@ if [ -z "$RESPONSE" ]; then
   log "Primary failed, trying fallback: $FALLBACK"
   if echo "$FALLBACK" | grep -q "claude"; then
     if [ -n "$ANTHROPIC_API_KEY" ]; then
-      RESPONSE=$(python3 "$APEX_HOME/services/call_model.py" "$FALLBACK" \
+      RESPONSE=$(python3 "$APEX_HOME/kernel/call_model.py" "$FALLBACK" \
         "$TMP_DIR/system_prompt.txt" "$TMP_DIR/user_prompt.txt" \
         "${TEMPERATURE:-0.3}" 2>/dev/null) || true
     else
@@ -149,7 +149,7 @@ fi
 
 if [ -z "$RESPONSE" ]; then
   log "All models failed, trying qwen3.5-apex as last resort"
-  RESPONSE=$(python3 "$APEX_HOME/services/call_model.py" "qwen3.5-apex" \
+  RESPONSE=$(python3 "$APEX_HOME/kernel/call_model.py" "qwen3.5-apex" \
     "$TMP_DIR/system_prompt.txt" "$TMP_DIR/user_prompt.txt" "0.3" 2>/dev/null) || true
 fi
 
@@ -168,7 +168,7 @@ log "Response received ($RESP_LENGTH chars)"
 echo "$RESPONSE" > "$TMP_DIR/raw_response.txt"
 
 # Parse through the structured parser
-PARSED=$(python3 "$APEX_HOME/services/parse_response.py" "$TMP_DIR/raw_response.txt" 2>/dev/null) || PARSED=""
+PARSED=$(python3 "$APEX_HOME/kernel/parse_response.py" "$TMP_DIR/raw_response.txt" 2>/dev/null) || PARSED=""
 
 if [ -z "$PARSED" ]; then
   log "WARN: Parser failed, storing raw response"

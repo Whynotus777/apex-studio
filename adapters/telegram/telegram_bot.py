@@ -9,7 +9,7 @@ Setup:
 1. Create a bot via @BotFather on Telegram
 2. Set TELEGRAM_BOT_TOKEN in .env
 3. Set TELEGRAM_CHAT_ID in .env (your personal chat ID)
-4. Run: python3 services/telegram_bot.py
+4. Run: python3 adapters/telegram/telegram_bot.py
 """
 
 import os
@@ -61,7 +61,7 @@ def db_execute(sql, params=None):
 
 def spawn_agent(agent_name, task_id=None):
     """Spawn an agent and return its response."""
-    cmd = [os.path.join(APEX_HOME, "services", "spawn-agent.sh"), agent_name]
+    cmd = [os.path.join(APEX_HOME, "kernel", "spawn-agent.sh"), agent_name]
     if task_id:
         cmd.append(task_id)
 

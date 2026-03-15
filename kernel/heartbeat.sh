@@ -1,6 +1,6 @@
 #!/bin/bash
 # heartbeat.sh — Triggered by cron, spawns agents based on schedule
-# Usage: ./services/heartbeat.sh <agent_name>
+# Usage: ./kernel/heartbeat.sh <agent_name>
 APEX_HOME="${APEX_HOME:-$HOME/apex-studio}"
 AGENT="$1"
 
@@ -13,7 +13,7 @@ fi
 [ -f "$APEX_HOME/.env" ] && export $(grep -v '^#' "$APEX_HOME/.env" | xargs)
 
 # Log heartbeat
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Heartbeat: $AGENT" >> "$APEX_HOME/services/heartbeat.log"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Heartbeat: $AGENT" >> "$APEX_HOME/kernel/heartbeat.log"
 
 # Spawn the agent
-"$APEX_HOME/services/spawn-agent.sh" "$AGENT" >> "$APEX_HOME/services/heartbeat.log" 2>&1
+"$APEX_HOME/kernel/spawn-agent.sh" "$AGENT" >> "$APEX_HOME/kernel/heartbeat.log" 2>&1

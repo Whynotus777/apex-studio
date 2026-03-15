@@ -11,4 +11,4 @@ if [ "$PENDING" = "0" ]; then
 fi
 
 echo "Processing $PENDING pending review(s)..."
-python3 "$APEX_HOME/services/run_critic.py"
+python3 "$APEX_HOME/kernel/run_critic.py"

@@ -7,13 +7,13 @@ echo "=== APEX JSON Output Test ==="
 echo ""
 
 # Run parser unit tests first
-"$APEX_HOME/services/test_parser.sh"
+"$APEX_HOME/tests/test_parser.sh"
 echo ""
 
 # Live agent test
 echo "--- Live Agent Test (Builder, ~1-2 min) ---"
 sqlite3 "$APEX_HOME/db/apex_state.db" "UPDATE tasks SET status='backlog', checked_out_by=NULL WHERE id='test-json-001';"
-"$APEX_HOME/services/spawn-agent.sh" builder test-json-001
+"$APEX_HOME/kernel/spawn-agent.sh" builder test-json-001
 
 echo ""
 echo "--- Post-run DB check ---"

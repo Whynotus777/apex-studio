@@ -12,7 +12,7 @@ echo ""
 # Reset task status
 sqlite3 "$APEX_HOME/db/apex_state.db" "UPDATE tasks SET status='backlog', checked_out_by=NULL WHERE id='test-002';"
 
-"$APEX_HOME/services/spawn-agent.sh" builder test-002
+"$APEX_HOME/kernel/spawn-agent.sh" builder test-002
 
 echo ""
 echo "=== Post-Run Checks ==="
@@ -27,4 +27,4 @@ echo "Messages sent (should be none or only to valid agents):"
 sqlite3 "$APEX_HOME/db/apex_state.db" "SELECT from_agent, to_agent, content FROM agent_messages ORDER BY id DESC LIMIT 3;"
 echo ""
 echo "Scratchpad tail:"
-tail -20 "$APEX_HOME/agents/builder/workspace/scratchpad.md"
+tail -20 "$APEX_HOME/templates/startup-chief-of-staff/agents/builder/workspace/scratchpad.md"

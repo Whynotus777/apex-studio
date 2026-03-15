@@ -2,4 +2,4 @@ db/apex_state.db
 .env
 __pycache__/
 *.pyc
-services/perplexica/
+kernel/perplexica/

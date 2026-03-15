@@ -36,3 +36,9 @@ No external data sources accessed this session. Must strictly adhere to 'No sign
 
 --- sess-scout-1773547201 | 2026-03-15 00:02:20 | Task: heartbeat ---
 Builder is seeking specific vendor schema files which are not publicly available as AI-generated content. Future interactions should focus on defining custom schemas based on public data points rather than requesting proprietary formats.
+
+--- sess-scout-1773550816 | 2026-03-15 01:02:03 | Task: test-scout-001 ---
+Task requires data that is impossible to retrieve without search tools. Must report 'No signals found this session' rather than inventing content.
+
+--- sess-scout-1773551945 | 2026-03-15 01:21:16 | Task: test-scout-001 ---
+Session blocked for all research tasks requiring external data verification. Must request tool activation before proceeding.
