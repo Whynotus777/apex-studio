@@ -14,6 +14,11 @@ from kernel.api import ApexKernel
 from kernel.evidence import EvidenceStore
 from kernel.learning import AgentLearning
 
+try:
+    from kernel.display_names import DisplayNameResolver
+except ImportError:  # pragma: no cover - optional helper may not exist yet
+    DisplayNameResolver = None  # type: ignore[assignment]
+
 
 class WalApexKernel(ApexKernel):
     """ApexKernel variant that enforces WAL mode on every SQLite connection."""
@@ -651,6 +656,13 @@ def get_task_reviews(task_id: str) -> dict[str, Any] | None:
         if overall_rows:
             overall_score = overall_rows[0]["score"]
 
+    recommendation_summary = _build_review_recommendation_summary(
+        verdict=verdict,
+        feedback_text=feedback_text,
+        dimensions=dimensions,
+        raw_feedback=raw,
+    )
+
     return {
         "id": row["id"],
         "task_id": row["task_id"],
@@ -658,10 +670,132 @@ def get_task_reviews(task_id: str) -> dict[str, Any] | None:
         "stakes": row.get("stakes"),
         "verdict": verdict,
         "overall_score": overall_score,
+        "recommendation_summary": recommendation_summary,
         "feedback": feedback_text,
         "dimensions": dimensions or None,
         "created_at": row.get("created_at"),
     }
+
+
+_REVIEW_DIMENSION_LABELS = {
+    "accuracy": "Accuracy",
+    "completeness": "Completeness",
+    "actionability": "Actionability",
+    "conciseness": "Conciseness",
+    "hard_rule_compliance": "Hard rule compliance",
+    "grounding": "Grounding",
+    "evidence_grounding": "Evidence grounding",
+    "authenticity": "Authenticity",
+    "relevance": "Relevance",
+}
+
+_REVIEW_DIMENSION_DESCRIPTIONS = {
+    "accuracy": "check the factual claims against the cited sources",
+    "completeness": "consider adding a concrete example",
+    "actionability": "make the next step more explicit",
+    "conciseness": "tighten repetition and trim filler",
+    "hard_rule_compliance": "check the output against the non-negotiable rules",
+    "grounding": "tie more claims directly to verified sources",
+    "evidence_grounding": "verify every cited source before sending this forward",
+    "authenticity": "rewrite in a more natural human voice",
+    "relevance": "tighten the fit to the task and audience",
+}
+
+_REVIEW_VERDICT_ACTIONS = {
+    "PASS": "recommends approval",
+    "REVISE": "flagged issues",
+    "BLOCK": "blocked this output",
+}
+
+
+def _get_critic_display_name() -> str:
+    fallback = "Your Quality Editor"
+    if DisplayNameResolver is None:
+        return fallback
+    try:
+        return str(DisplayNameResolver.get_critic_display_name()).strip() or fallback
+    except TypeError:
+        try:
+            return str(DisplayNameResolver().get_critic_display_name()).strip() or fallback
+        except Exception:
+            return fallback
+    except Exception:
+        return fallback
+
+
+def _first_sentence(text: str | None) -> str:
+    if not text:
+        return ""
+    normalized = " ".join(str(text).strip().split())
+    if not normalized:
+        return ""
+    for marker in (". ", "! ", "? "):
+        if marker in normalized:
+            head = normalized.split(marker, 1)[0].strip()
+            return head + marker.strip()
+    if normalized[-1] not in ".!?":
+        return normalized + "."
+    return normalized
+
+
+def _format_review_score(score: Any) -> str:
+    try:
+        return f"{float(score):.1f}"
+    except (TypeError, ValueError):
+        return "0.0"
+
+
+def _build_review_recommendation_summary(
+    verdict: str | None,
+    feedback_text: str | None,
+    dimensions: list[dict[str, Any]],
+    raw_feedback: Any,
+) -> str:
+    display_name = _get_critic_display_name().rstrip(".")
+    action = _REVIEW_VERDICT_ACTIONS.get((verdict or "").upper(), "shared feedback")
+    sentences: list[str] = [f"{display_name} {action}."]
+
+    feedback_sentence = _first_sentence(feedback_text)
+    if feedback_sentence:
+        sentences.append(feedback_sentence)
+
+    dimension_descriptions: dict[str, str] = {}
+    if isinstance(raw_feedback, dict):
+        maybe_descriptions = raw_feedback.get("dimension_descriptions")
+        if isinstance(maybe_descriptions, dict):
+            dimension_descriptions = {
+                str(key): str(value).strip()
+                for key, value in maybe_descriptions.items()
+                if value
+            }
+
+    scored_dimensions = []
+    for dim in dimensions:
+        try:
+            score_value = float(dim.get("score"))
+        except (TypeError, ValueError):
+            continue
+        scored_dimensions.append((str(dim.get("name") or ""), score_value))
+
+    if scored_dimensions:
+        weakest_name, weakest_score = min(scored_dimensions, key=lambda item: item[1])
+        if weakest_name and weakest_score < 4.0:
+            label = _REVIEW_DIMENSION_LABELS.get(
+                weakest_name,
+                weakest_name.replace("_", " ").strip().title(),
+            )
+            description = (
+                dimension_descriptions.get(weakest_name)
+                or _REVIEW_DIMENSION_DESCRIPTIONS.get(weakest_name)
+            )
+            weakest_sentence = f"{label} scored {_format_review_score(weakest_score)}/5"
+            if description:
+                weakest_sentence += f" — {description}"
+            if not weakest_sentence.endswith("."):
+                weakest_sentence += "."
+            sentences.append(weakest_sentence)
+
+    return " ".join(part.strip() for part in sentences if part and part.strip())
 
 
 @app.get("/api/tasks/{task_id}/chain")
@@ -1337,3 +1471,602 @@ def get_team_ui_schema(team_id: str) -> dict[str, Any]:
         # Template missing or unreadable — return normalized default
         return _normalize_ui_schema({})
     return _get_ui_schema(manifest)
+
+# ── Team progress endpoint ───────────────────────────────────────────
+
+from datetime import datetime, timezone
+
+_PROGRESS_ICON_BY_SUFFIX = {
+    "scout": "🔭",
+    "writer": "✍️",
+    "analyst": "📊",
+    "builder": "🔨",
+    "critic": "🛡️",
+    "scheduler": "📅",
+    "strategist": "🧭",
+    "publisher": "📣",
+    "apex": "🧠",
+}
+
+_PROGRESS_ROLE_DESC_BY_SUFFIX = {
+    "scout": "Finds trending topics and industry news",
+    "writer": "Drafts posts matched to your voice",
+    "analyst": "Analyzes findings and ranks opportunities",
+    "builder": "Builds and ships the output",
+    "critic": "Reviews accuracy and tone",
+    "scheduler": "Plans timing and cross-posting",
+    "strategist": "Turns research into positioning and outreach angles",
+    "publisher": "Prepares publishing and distribution",
+    "apex": "Coordinates the team",
+}
+
+_PROGRESS_STATUS_BY_AGENT = {
+    "active": "active",
+    "drafting": "active",
+    "reviewing": "active",
+    "blocked": "blocked",
+    "paused": "paused",
+    "idle": "waiting",
+}
+
+
+def _progress_suffix(agent_name: str) -> str:
+    return str(agent_name).rsplit("-", 1)[-1].lower()
+
+
+def _progress_display_info(agent_name: str, template_id: str) -> dict[str, str]:
+    suffix = _progress_suffix(agent_name)
+    display_name = suffix.replace("_", " ").title()
+    icon = _PROGRESS_ICON_BY_SUFFIX.get(suffix, "🤖")
+    role_description = _PROGRESS_ROLE_DESC_BY_SUFFIX.get(suffix, "Helps move the mission forward")
+
+    agent_json = _read_agent_json(template_id, suffix)
+    if agent_json.get("description"):
+        role_description = str(agent_json["description"])
+
+    try:
+        import kernel.display_names as display_names  # type: ignore
+
+        for fn_name in ("get_agent_display", "display_for_agent"):
+            fn = getattr(display_names, fn_name, None)
+            if callable(fn):
+                payload = fn(agent_name)
+                if isinstance(payload, dict):
+                    display_name = str(payload.get("display_name") or display_name)
+                    role_description = str(payload.get("role_description") or role_description)
+                    icon = str(payload.get("icon") or icon)
+                    return {
+                        "display_name": display_name,
+                        "role_description": role_description,
+                        "icon": icon,
+                    }
+
+        for fn_name in ("get_agent_display_name", "display_name_for_agent"):
+            fn = getattr(display_names, fn_name, None)
+            if callable(fn):
+                value = fn(agent_name)
+                if value:
+                    display_name = str(value)
+                    break
+
+        for fn_name in ("get_agent_role_description", "role_description_for_agent"):
+            fn = getattr(display_names, fn_name, None)
+            if callable(fn):
+                value = fn(agent_name)
+                if value:
+                    role_description = str(value)
+                    break
+
+        for fn_name in ("get_agent_icon", "icon_for_agent"):
+            fn = getattr(display_names, fn_name, None)
+            if callable(fn):
+                value = fn(agent_name)
+                if value:
+                    icon = str(value)
+                    break
+    except Exception:
+        pass
+
+    return {
+        "display_name": display_name,
+        "role_description": role_description,
+        "icon": icon,
+    }
+
+
+def _progress_parse_ts(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _progress_relative_time(raw: str | None) -> str:
+    dt = _progress_parse_ts(raw)
+    if dt is None:
+        return "just now"
+    delta = datetime.now(timezone.utc) - dt
+    seconds = max(int(delta.total_seconds()), 0)
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hr ago"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def _progress_rewrite_message(
+    *,
+    agent_name: str,
+    target_name: str | None = None,
+    msg_type: str | None = None,
+    content: str | None = None,
+    template_id: str,
+    source: str,
+) -> str:
+    info = _progress_display_info(agent_name, template_id)
+    actor = info["display_name"]
+    target = _progress_display_info(target_name or "", template_id)["display_name"] if target_name else "another teammate"
+    text = str(content or "").strip()
+    lower = text.lower()
+    kind = str(msg_type or "").lower()
+
+    if source == "message":
+        if kind in {"research_handoff", "handoff", "request"}:
+            return f"Handed research to {target}"
+        if kind == "review_request":
+            return f"{actor} sent work to {target} for review"
+        if kind in {"revision_request", "review_feedback"} or "revision" in lower:
+            return f"{actor} requested revisions"
+        if "sent request to" in lower:
+            return f"Handed research to {target}"
+        return f"{actor} sent an update"
+
+    if source == "session":
+        if "found" in lower and "investor" in lower:
+            return f"{actor} found potential investors with fresh sources"
+        if "found" in lower and "topic" in lower:
+            return f"{actor} found trending topics"
+        if "rank" in lower or "tier" in lower:
+            return f"{actor} ranked the top opportunities"
+        if "draft" in lower and "linkedin" in lower:
+            return f"{actor} drafted a LinkedIn post"
+        if "draft" in lower and "email" in lower:
+            return f"{actor} drafted outreach emails"
+        if "outreach" in lower or "cold email" in lower:
+            return f"{actor} prepared outreach angles and draft emails"
+        if "review" in lower:
+            return f"{actor} is reviewing the draft"
+        return f"{actor} updated the task"
+
+    return f"{actor} updated the task"
+
+
+@app.get("/api/teams/{team_id}/progress")
+def get_team_progress(team_id: str) -> dict[str, Any]:
+    workspace = _workspace_or_404(team_id)
+    template_id = workspace["template_id"]
+
+    tasks = kernel._fetch_all(
+        """
+        SELECT id, title, description, status, review_status, assigned_to, created_at
+        FROM tasks
+        WHERE workspace_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (team_id,),
+    )
+    tasks = [
+        t for t in tasks
+        if not str(t.get("title") or "").lower().startswith("e2e test:")
+        and "e2e verification" not in str(t.get("title") or "").lower()
+    ]
+
+    active_task = next((
+        t for t in tasks
+        if str(t.get("status") or "") in {"in_progress", "active", "review"}
+    ), None)
+    mission = str((active_task or tasks[0])["title"]) if tasks else ""
+
+    members = kernel._fetch_all(
+        """
+        SELECT agent_name, status, current_task, last_heartbeat, model_active
+        FROM agent_status
+        WHERE workspace_id = ?
+        ORDER BY agent_name ASC
+        """,
+        (team_id,),
+    )
+
+    session_rows = kernel._fetch_all(
+        """
+        SELECT s.agent_name, s.task_id, s.created_at AS ts, s.context
+        FROM agent_sessions s
+        JOIN tasks t ON t.id = s.task_id
+        WHERE t.workspace_id = ?
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT 25
+        """,
+        (team_id,),
+    )
+    session_agents = {str(r.get("agent_name")) for r in session_rows}
+
+    progress_agents: list[dict[str, Any]] = []
+    active_agent_payload: dict[str, Any] | None = None
+    for member in members:
+        info = _progress_display_info(member["agent_name"], template_id)
+        internal_name = str(member["agent_name"])
+        normalized_status = _PROGRESS_STATUS_BY_AGENT.get(str(member.get("status") or "idle"), "waiting")
+        if normalized_status == "waiting" and internal_name in session_agents:
+            normalized_status = "completed"
+        payload = {
+            "internal_name": internal_name,
+            "display_name": info["display_name"],
+            "role_description": info["role_description"],
+            "status": normalized_status,
+            "icon": info["icon"],
+        }
+        progress_agents.append(payload)
+        if str(member.get("status") or "") in {"active", "drafting", "reviewing"}:
+            active_agent_payload = payload
+
+    activity_rows: list[dict[str, Any]] = []
+    message_rows = kernel._fetch_all(
+        """
+        SELECT from_agent, to_agent, msg_type, content, created_at AS ts
+        FROM agent_messages
+        WHERE workspace_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 25
+        """,
+        (team_id,),
+    )
+
+    for row in session_rows:
+        context = kernel._load_json(row.get("context"), fallback={})
+        actions = ""
+        if isinstance(context, dict):
+            actions = str(context.get("actions_taken") or context.get("proposed_output") or "")
+        activity_rows.append({
+            "ts": row.get("ts"),
+            "message": _progress_rewrite_message(
+                agent_name=str(row.get("agent_name") or ""),
+                content=actions,
+                template_id=template_id,
+                source="session",
+            ),
+            "agent_icon": _progress_display_info(str(row.get("agent_name") or ""), template_id)["icon"],
+        })
+
+    for row in message_rows:
+        activity_rows.append({
+            "ts": row.get("ts"),
+            "message": _progress_rewrite_message(
+                agent_name=str(row.get("from_agent") or ""),
+                target_name=str(row.get("to_agent") or ""),
+                msg_type=str(row.get("msg_type") or ""),
+                content=str(row.get("content") or ""),
+                template_id=template_id,
+                source="message",
+            ),
+            "agent_icon": _progress_display_info(str(row.get("from_agent") or ""), template_id)["icon"],
+        })
+
+    activity_rows.sort(key=lambda item: _progress_parse_ts(str(item.get("ts") or "")) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    recent_activity = [
+        {
+            "time": _progress_relative_time(str(item.get("ts") or "")),
+            "message": item["message"],
+            "agent_icon": item["agent_icon"],
+        }
+        for item in activity_rows[:10]
+    ]
+
+    pending_review_count = sum(
+        1 for t in tasks
+        if str(t.get("review_status") or "") == "critic_passed"
+    )
+
+    if active_agent_payload is not None:
+        action = "working"
+        name = active_agent_payload["display_name"]
+        status_message = f"Your {name} is working..."
+        lowered = name.lower()
+        if "creator" in lowered or "writer" in lowered:
+            status_message = f"Your {name} is drafting..."
+        elif "editor" in lowered or "critic" in lowered:
+            status_message = f"Your {name} is reviewing..."
+        elif "research" in lowered or "scout" in lowered:
+            status_message = f"Your {name} is researching..."
+        status = "working"
+    elif pending_review_count > 0:
+        reviewer = next((a for a in progress_agents if a["internal_name"].endswith("-critic")), None)
+        reviewer_name = reviewer["display_name"] if reviewer else "team"
+        status_message = f"Your {reviewer_name} reviewed the draft — it is ready for you."
+        status = "working"
+    else:
+        status_message = "Your team is idle — send a mission to get started."
+        status = "idle"
+
+    try:
+        template = kernel.get_template(template_id)
+        template_name = str(template.get("name") or template_id)
+    except Exception:
+        template_name = template_id
+
+    return {
+        "team_name": workspace.get("name") or team_id,
+        "template_name": template_name,
+        "status": status,
+        "status_message": status_message,
+        "mission": mission,
+        "agents": progress_agents,
+        "recent_activity": recent_activity,
+        "pending_review_count": pending_review_count,
+    }
+
+
+# ── Architect — team recommendation engine ────────────────────────────
+
+
+class ArchitectRecommendRequest(BaseModel):
+    goal: str
+
+
+_ARCHITECT_ROLE_ICONS: dict[str, str] = {
+    "discovery": "🔭",
+    "enrichment": "📊",
+    "creation": "✍️",
+    "outreach": "🎯",
+    "quality_gate": "🛡️",
+    "publishing_ops": "📅",
+    "intelligence": "🔍",
+    "orchestrator": "⚡",
+    "custom": "🤖",
+}
+
+_ARCHITECT_TEMPLATE_META: dict[str, dict[str, str]] = {
+    "investor-research": {
+        "why": "Your goal involves finding investors — this team specializes in investor discovery, ranking by thesis fit, and drafting personalized outreach for your top targets.",
+        "pipeline_summary": "Scout finds → Analyst ranks → Strategist drafts outreach → Critic verifies",
+        "constraints_placeholder": "e.g., Only seed-stage funds, focus on AI infrastructure...",
+    },
+    "content-engine": {
+        "why": "Your goal involves content creation — this team researches trending topics, drafts posts matched to your voice, and manages your publishing cadence.",
+        "pipeline_summary": "Scout researches → Writer drafts → Critic reviews → Scheduler plans",
+        "constraints_placeholder": "e.g., Only write about AI agents, avoid promotional tone...",
+    },
+    "sales-outreach": {
+        "why": "Your goal involves sales outreach — this team finds ICP-matched prospects, enriches each with fresh signals, and drafts personalized cold emails.",
+        "pipeline_summary": "Scout finds prospects → Analyst enriches → Writer drafts → Critic verifies",
+        "constraints_placeholder": "e.g., B2B SaaS companies, 50–500 employees, Series A stage...",
+    },
+    "research-assistant": {
+        "why": "Your goal involves research — this team searches for evidence, synthesizes findings, and delivers quality-verified intelligence briefings.",
+        "pipeline_summary": "Scout searches → Analyst synthesizes → Critic verifies",
+        "constraints_placeholder": "e.g., Focus on peer-reviewed sources, include recent 2026 data...",
+    },
+    "startup-chief-of-staff": {
+        "why": "Your goal involves startup operations — this team manages your goals, researches options, and executes across analysis and development tasks.",
+        "pipeline_summary": "Apex routes → Scout researches → Analyst synthesizes → Builder executes → Critic reviews",
+        "constraints_placeholder": "e.g., Focus on go-to-market strategy, B2B SaaS context...",
+    },
+    "competitive-intel": {
+        "why": "Your goal involves competitive monitoring — this team tracks competitor moves, surfaces market signals, and delivers verified intelligence briefings.",
+        "pipeline_summary": "Scout monitors → Analyst flags changes → Critic verifies",
+        "constraints_placeholder": "e.g., Focus on pricing changes, product launches, hiring signals...",
+    },
+    "gtm-engine": {
+        "why": "Your goal involves go-to-market — this team covers market research, positioning, content creation, and distribution across channels.",
+        "pipeline_summary": "Scout researches → Strategist positions → Writer drafts → Critic reviews → Publisher distributes",
+        "constraints_placeholder": "e.g., Focus on developer audience, emphasize technical credibility...",
+    },
+}
+
+_ARCHITECT_SYNONYMS: dict[str, list[str]] = {
+    "investor-research": [
+        "investor", "investors", "vc", "vcs", "venture", "fund", "funds",
+        "raise", "fundraise", "fundraising", "capital", "pitch", "seed",
+        "series", "angel", "angels", "investment",
+    ],
+    "content-engine": [
+        "content", "linkedin", "post", "posts", "tweet", "tweets", "social",
+        "media", "publish", "writing", "write", "blog", "newsletter", "draft",
+        "marketing", "create",
+    ],
+    "sales-outreach": [
+        "sales", "outreach", "prospect", "prospects", "lead", "leads",
+        "email", "cold", "crm", "customer", "customers", "client", "clients",
+        "pipeline", "sdr", "selling",
+    ],
+    "research-assistant": [
+        "research", "investigate", "analyze", "analyse", "summarize",
+        "brief", "briefing", "intelligence", "report", "study",
+        "monitor", "weekly", "digest",
+    ],
+    "startup-chief-of-staff": [
+        "startup", "operations", "ops", "goals", "strategy", "roadmap",
+        "chief", "staff", "build", "building",
+    ],
+    "competitive-intel": [
+        "competitor", "competitors", "competitive", "competition", "monitor",
+        "monitoring", "market", "intelligence", "tracking", "track",
+        "benchmark", "landscape",
+    ],
+    "gtm-engine": [
+        "gtm", "positioning", "messaging", "campaign",
+        "launch", "distribution", "channels", "cmo",
+    ],
+}
+
+import re as _re
+
+
+def _arch_tokenize(text: str) -> set[str]:
+    STOPWORDS = {
+        "the", "and", "for", "you", "your", "our", "this", "that", "with",
+        "have", "from", "they", "will", "been", "are", "not", "but", "can",
+        "all", "any", "get", "help", "need", "want", "like", "also", "into",
+        "its", "out", "who", "how", "was", "use", "has", "had", "what",
+        "just", "very", "make", "send", "give", "set", "put", "let",
+    }
+    words = _re.findall(r"[a-z]{3,}", text.lower())
+    return {w for w in words if w not in STOPWORDS}
+
+
+def _arch_template_keywords(template_id: str, manifest: dict[str, Any]) -> set[str]:
+    words: set[str] = set()
+    words |= _arch_tokenize(manifest.get("name", ""))
+    words |= _arch_tokenize(manifest.get("description", ""))
+    words |= _arch_tokenize(manifest.get("category", ""))
+    ui = manifest.get("ui_schema") or {}
+    display = ui.get("team_display") or {}
+    words |= _arch_tokenize(display.get("category", ""))
+    words |= _arch_tokenize(display.get("short_description", ""))
+    for agent in manifest.get("agents", []):
+        words |= _arch_tokenize(str(agent.get("role", "")))
+        words |= _arch_tokenize(str(agent.get("description", "")))
+    for syn in _ARCHITECT_SYNONYMS.get(template_id, []):
+        words.add(syn.lower())
+    return words
+
+
+def _arch_agent_preview(manifest: dict[str, Any]) -> list[dict[str, str]]:
+    result = []
+    for agent_cfg in manifest.get("agents", []):
+        agent_name = str(agent_cfg.get("name") or "")
+        role = str(agent_cfg.get("role") or "custom")
+        icon = _ARCHITECT_ROLE_ICONS.get(role, "🤖")
+        label = agent_name.capitalize() if agent_name else role.replace("_", " ").title()
+        desc = str(agent_cfg.get("description") or "")
+        short = desc.split("—")[0].strip() if "—" in desc else desc.split(".")[0].strip()
+        if not short:
+            short = role.replace("_", " ").capitalize()
+        if len(short) > 60:
+            short = short[:57] + "..."
+        result.append({"role": label, "description": short, "icon": icon})
+    return result
+
+
+@app.post("/api/architect/recommend")
+def architect_recommend(payload: ArchitectRecommendRequest) -> dict[str, Any]:
+    """
+    V1 keyword-matching team recommender.
+
+    Scores all templates by keyword overlap with the user's goal and returns
+    the best match with a team preview and follow-up questions.
+    Returns null recommended_template when no confident match is found.
+
+    Request:  { "goal": "string" }
+    Response: ArchitectRecommendation
+    """
+    _NO_MATCH: dict[str, Any] = {
+        "recommended_template": None,
+        "message": "We're still learning how to help with that. Can you tell us more?",
+        "follow_up_questions": [
+            {
+                "id": "clarify",
+                "question": "What kind of outcome are you looking for?",
+                "type": "text",
+                "placeholder": "e.g., a report, a weekly update, drafted emails...",
+            }
+        ],
+    }
+
+    goal_tokens = _arch_tokenize(payload.goal.strip())
+    if not goal_tokens:
+        return _NO_MATCH
+
+    templates_dir = APEX_HOME / "templates"
+    best_id: str | None = None
+    best_score = 0
+    best_kw_size = 0
+    best_manifest: dict[str, Any] = {}
+
+    if templates_dir.exists():
+        for entry in sorted(templates_dir.iterdir()):
+            manifest_path = entry / "template.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            kw = _arch_template_keywords(entry.name, manifest)
+            score = len(goal_tokens & kw)
+            # Prefer higher score; on tie prefer smaller keyword set (more specific template)
+            if score > best_score or (score == best_score and score > 0 and len(kw) < best_kw_size):
+                best_score = score
+                best_kw_size = len(kw)
+                best_id = entry.name
+                best_manifest = manifest
+
+    if best_score == 0 or best_id is None:
+        return _NO_MATCH
+
+    ui_schema = _get_ui_schema(best_manifest)
+    display = ui_schema["team_display"]
+    meta = _ARCHITECT_TEMPLATE_META.get(best_id, {})
+
+    why = meta.get("why") or (
+        f"Your goal matches this team — it specializes in {display['short_description'].lower()}."
+    )
+    confidence = "high" if best_score >= 2 else "medium"
+    agent_preview = _arch_agent_preview(best_manifest)
+    pipeline_summary = meta.get("pipeline_summary") or " → ".join(
+        a["role"] for a in agent_preview
+    )
+    constraints_placeholder = meta.get(
+        "constraints_placeholder", "e.g., any special requirements or constraints..."
+    )
+
+    return {
+        "recommended_template": {
+            "id": best_id,
+            "name": best_manifest.get("name", best_id),
+            "description": display["short_description"],
+            "icon": display["icon"],
+            "match_confidence": confidence,
+            "why": why,
+        },
+        "team_preview": {
+            "agents": agent_preview,
+            "pipeline_summary": pipeline_summary,
+        },
+        "follow_up_questions": [
+            {
+                "id": "autonomy",
+                "question": "How hands-on do you want to be?",
+                "type": "single_select",
+                "options": [
+                    {"value": "hands_on", "label": "Review everything before it goes out", "default": True},
+                    {"value": "managed", "label": "Only flag issues — auto-approve good work"},
+                    {"value": "autopilot", "label": "Run fully on autopilot"},
+                ],
+            },
+            {
+                "id": "cadence",
+                "question": "How often should we update you?",
+                "type": "single_select",
+                "options": [
+                    {"value": "after_each_step", "label": "After every step", "default": True},
+                    {"value": "daily", "label": "Daily summary"},
+                    {"value": "on_completion", "label": "Only when something needs your attention"},
+                ],
+            },
+            {
+                "id": "constraints",
+                "question": "Anything we should know?",
+                "type": "text",
+                "placeholder": constraints_placeholder,
+            },
+        ],
+    }

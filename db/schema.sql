@@ -130,6 +130,16 @@ CREATE TABLE IF NOT EXISTS workspaces (
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_workspaces_template ON workspaces(template_id);
+-- Phase E: Mission Brief
+CREATE TABLE IF NOT EXISTS mission_briefs (
+    workspace_id TEXT PRIMARY KEY,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    constraints TEXT DEFAULT '[]',
+    definition_of_done TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
 -- Phase B: Evidence primitive
 CREATE TABLE IF NOT EXISTS evidence (
     id TEXT PRIMARY KEY,

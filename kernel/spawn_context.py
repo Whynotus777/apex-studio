@@ -176,7 +176,7 @@ def build_evidence() -> str:
 
         # Fast path — reuse existing evidence for this task
         if ev.get_evidence(TASK_ID):
-            return ev.format_for_prompt(TASK_ID)
+            return ev.get_capped_evidence(TASK_ID)
 
         # Check tool grant
         tools = k.get_agent_tools(AGENT_NAME)
@@ -198,7 +198,7 @@ def build_evidence() -> str:
                 ).fetchone()
                 conn.close()
                 if row and ev.get_evidence(row[0]):
-                    return ev.format_for_prompt(row[0])
+                    return ev.get_capped_evidence(row[0])
             return "## Search Evidence\n(none available)"
 
         # Agent has search grant — run multi-query search
@@ -232,7 +232,7 @@ def build_evidence() -> str:
         if not any_results:
             print(f"[spawn_context] web_search returned 0 results for all queries: {queries}", file=sys.stderr)
             return "## Search Evidence\n(none available)"
-        return ev.format_for_prompt(TASK_ID)
+        return ev.get_capped_evidence(TASK_ID)
     except Exception as exc:
         print(f"[spawn_context] build_evidence error: {exc}", file=sys.stderr)
         return "## Search Evidence\n(none available)"
@@ -267,6 +267,21 @@ def build_learning() -> str:
         return ""
 
 
+def build_mission_brief() -> str:
+    """Return mission brief summary for this workspace, or empty string if not set."""
+    try:
+        ws_id = AGENT_NAME.rsplit("-", 1)[0] if "-" in AGENT_NAME else ""
+        if not ws_id.startswith("ws-"):
+            return ""
+        from kernel.mission_brief import MissionBrief
+        mb = MissionBrief(APEX_HOME)
+        summary = mb.get_brief_summary(ws_id)
+        return summary or ""
+    except Exception as exc:
+        print(f"[spawn_context] build_mission_brief error: {exc}", file=sys.stderr)
+        return ""
+
+
 def main() -> None:
     parts: list[str] = []
 
@@ -283,6 +298,11 @@ def main() -> None:
     learning = build_learning()
     if learning:
         parts.append(learning)
+
+    # Mission brief prepended — first thing agents see.
+    brief = build_mission_brief()
+    if brief:
+        parts.insert(0, brief)
 
     if parts:
         print("\n\n".join(parts))

@@ -1242,6 +1242,39 @@ class ApexKernel:
             "tools_granted": tools_granted,
         }
 
+    # ------------------------------------------------------------------ #
+    # Mission Brief                                                        #
+    # ------------------------------------------------------------------ #
+
+    def create_mission_brief(
+        self,
+        workspace_id: str,
+        objective: str,
+        definition_of_done: str | None = None,
+        constraints: list | None = None,
+    ) -> dict[str, Any]:
+        """Create initial mission brief when a team is launched. Pass-through to MissionBrief."""
+        try:
+            from kernel.mission_brief import MissionBrief
+        except ImportError:
+            from mission_brief import MissionBrief
+        mb = MissionBrief(self.apex_home)
+        return mb.create_brief(
+            workspace_id,
+            objective,
+            definition_of_done=definition_of_done,
+            constraints=constraints,
+        )
+
+    def get_mission_brief(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the current mission brief for a workspace, or None if not set."""
+        try:
+            from kernel.mission_brief import MissionBrief
+        except ImportError:
+            from mission_brief import MissionBrief
+        mb = MissionBrief(self.apex_home)
+        return mb.get_brief(workspace_id)
+
     def _set_permission_ws(
         self,
         agent_id: str,
@@ -1540,3 +1573,47 @@ class ApexKernel:
             lines = [f"- {str(item).strip()}" for item in value if str(item).strip()]
             return ("\n".join(lines) + "\n") if lines else ""
         return ""
+
+    # ── Display name helpers ──────────────────────────────────────────────
+
+    def _display_resolver(self):  # type: ignore[return]
+        """Lazy-load DisplayNameResolver (avoids circular import at module level)."""
+        try:
+            from kernel.display_names import DisplayNameResolver
+        except ImportError:
+            from display_names import DisplayNameResolver  # type: ignore[no-redef]
+        return DisplayNameResolver(apex_home=self.apex_home, db_path=self.db_path)
+
+    def get_agent_display_name(self, agent_name: str, workspace_id: str | None = None) -> str:
+        """Return a human-readable display name for an agent.
+
+        Args:
+            agent_name: Full or local agent name, e.g. 'ws-82c085cf-scout'.
+            workspace_id: Optional workspace context.
+
+        Returns:
+            Display name string, e.g. 'Research Scout'.
+        """
+        return self._display_resolver().get_display_name(agent_name, workspace_id)
+
+    def get_agent_display_info(self, agent_name: str, workspace_id: str | None = None) -> dict[str, Any]:
+        """Return full display metadata for an agent.
+
+        Returns dict with keys: internal_name, display_name, role_description, icon.
+        """
+        return self._display_resolver().get_display_info(agent_name, workspace_id)
+
+    def get_team_display_names(self, workspace_id: str) -> list[dict[str, Any]]:
+        """Return display info for every agent in a workspace.
+
+        Returns list of dicts sorted by local name, each with keys:
+        internal_name, display_name, role_description, icon.
+        """
+        return self._display_resolver().get_team_display_names(workspace_id)
+
+    def get_critic_display_name(self, workspace_id: str) -> str:
+        """Return the display name for the critic agent in a workspace.
+
+        Falls back to 'Quality Editor' if no critic agent is found.
+        """
+        return self._display_resolver().get_critic_display_name(workspace_id)
