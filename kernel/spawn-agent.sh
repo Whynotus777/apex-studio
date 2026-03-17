@@ -158,125 +158,14 @@ fi
     echo "No specific task. Run your heartbeat responsibilities."
   fi
 
-  # Search evidence injection (multi-query)
+  # Context injection (evidence + learning) — single Python process
   if [ -n "$TASK_ID" ]; then
-    cat > "$TMP_DIR/search_evidence.py" << 'PYEOF'
-import sys, os, urllib.request, json as _json
-apex_home = os.environ['APEX_HOME']
-db_path = os.environ['APEX_DB']
-agent_name = os.environ['APEX_AGENT']
-task_id = os.environ['APEX_TASK']
-sys.path.insert(0, apex_home)
-
-def generate_queries(task_text):
-    """Use the configured model to generate 3 focused search queries."""
-    import subprocess, tempfile, os
-    prompt = (
-        "Generate exactly 3 short web search queries (one per line, no numbering, "
-        "no extra text) for this research task. Prioritize sources from the last 2 weeks. "
-        "Accept sources up to 6 months old only if highly relevant. Add '2026' or "
-        "'March 2026' to at least one query to bias toward recent results.\n" + task_text
-    )
-    try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as sf:
-            sf.write("You are a search query generator. Output only queries, one per line.")
-            sys_path = sf.name
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as uf:
-            uf.write(prompt)
-            usr_path = uf.name
-        result = subprocess.run(
-            ["python3", os.path.join(os.environ.get("APEX_HOME", "."), "kernel", "call_model.py"),
-             "gemini-3-flash-preview", sys_path, usr_path, "0.3"],
-            capture_output=True, text=True, timeout=30,
-            env={**os.environ}
-        )
-        os.unlink(sys_path)
-        os.unlink(usr_path)
-        text = result.stdout.strip()
-        lines = [l.strip().lstrip("•-*0123456789. ") for l in text.split("\n") if l.strip()]
-        return lines[:3] if lines else [task_text[:200]]
-    except Exception:
-        return [task_text[:200]]
-
-try:
-    import sqlite3 as _sqlite3
-    from kernel.evidence import EvidenceStore
-    from kernel.api import ApexKernel
-    _ev = EvidenceStore(db_path)
-    _k = ApexKernel()
-
-    # 1. Same-task evidence (fastest path — reuse without any search)
-    if _ev.get_evidence(task_id):
-        print(_ev.format_for_prompt(task_id))
-        sys.exit(0)
-
-    # 2. Check tool grant: agents WITH search capability run new searches;
-    #    agents WITHOUT it (Writer, Analyst) inherit workspace evidence instead.
-    _tools = _k.get_agent_tools(agent_name)
-    has_search = any(t.get('tool_id') == 'web_search' or t.get('name') == 'web_search' for t in _tools)
-
-    if not has_search:
-        # Workspace inheritance: find most recent evidence from any sibling agent
-        _ws_prefix = agent_name.rsplit('-', 1)[0]  # ws-abc-writer → ws-abc
-        if _ws_prefix.startswith('ws-'):
-            _conn = _sqlite3.connect(db_path)
-            _row = _conn.execute(
-                """SELECT task_id FROM evidence
-                   WHERE agent_id LIKE ? AND task_id != ?
-                   ORDER BY created_at DESC LIMIT 1""",
-                (_ws_prefix + '-%', task_id),
-            ).fetchone()
-            _conn.close()
-            if _row and _ev.get_evidence(_row[0]):
-                print(_ev.format_for_prompt(_row[0]))
-                sys.exit(0)
-        print('## Search Evidence\n(none available)')
-        sys.exit(0)
-    # Agent has search grant — run multi-query searches
-    conn = _sqlite3.connect(db_path)
-    row = conn.execute('SELECT title, description FROM tasks WHERE id=?', (task_id,)).fetchone()
-    conn.close()
-    if not row or not row[0]:
-        print('## Search Evidence\n(none available)')
-        sys.exit(0)
-    title, description = row
-    task_text = (title + '. ' + (description or '')).strip()
-    queries = generate_queries(task_text)
-    from kernel.tool_adapter import execute_tool
-    ev = _ev  # reuse already-initialised EvidenceStore
-    seen_urls = set()
-    any_results = False
-    for query in queries:
-        result = execute_tool('web_search', {'query': query, 'max_results': 5})
-        if result.get('status') != 'ok' or not result.get('results'):
-            continue
-        deduped = [r for r in result['results'] if r.get('url') not in seen_urls]
-        if not deduped:
-            continue
-        seen_urls.update(r['url'] for r in deduped)
-        ev.store_evidence(task_id, agent_name, 'web_search', query, deduped)
-        any_results = True
-    if not any_results:
-        print('## Search Evidence\n(none available)')
-        sys.exit(0)
-    print(ev.format_for_prompt(task_id))
-except Exception:
-    print('## Search Evidence\n(none available)')
-PYEOF
-    SEARCH_EVIDENCE=$(APEX_HOME="$APEX_HOME" APEX_DB="$DB" APEX_AGENT="$AGENT_NAME" APEX_TASK="$TASK_ID" \
-      python3 "$TMP_DIR/search_evidence.py" 2>/dev/null) \
-      || SEARCH_EVIDENCE="## Search Evidence\n(none available)"
-    echo ""
-    echo "$SEARCH_EVIDENCE"
-  fi
-
-  # Learning context injection
-  LEARNING_CONTEXT=$(APEX_HOME="$APEX_HOME" APEX_DB="$DB" \
-    python3 "$APEX_HOME/kernel/learning_loader.py" "$AGENT_NAME" "$TASK_ID" 2>/dev/null) \
-    || LEARNING_CONTEXT=""
-  if [ -n "$LEARNING_CONTEXT" ]; then
-    echo ""
-    echo "$LEARNING_CONTEXT"
+    SPAWN_CONTEXT=$(APEX_HOME="$APEX_HOME" APEX_DB="$DB" APEX_AGENT="$AGENT_NAME" APEX_TASK="$TASK_ID" \
+      python3 "$APEX_HOME/kernel/spawn_context.py" 2>/dev/null) || SPAWN_CONTEXT=""
+    if [ -n "$SPAWN_CONTEXT" ]; then
+      echo ""
+      echo "$SPAWN_CONTEXT"
+    fi
   fi
 } > "$TMP_DIR/user_prompt.txt"
 

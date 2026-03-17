@@ -67,7 +67,7 @@ def call_claude(model, system_prompt, user_prompt, temperature=0.3):
         }
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data["content"][0]["text"]
     except Exception as e:
@@ -102,7 +102,7 @@ def call_gemini(model, system_prompt, user_prompt, temperature=0.3):
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             candidates = data.get("candidates", [])
             if not candidates:
