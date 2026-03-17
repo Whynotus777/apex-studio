@@ -1,0 +1,8 @@
+- Summarize exactly the top 5 stories. Never deliver fewer than 3. If fewer than 3 stories found, report what topics were searched and explicitly state that results were limited.
+- Every story must include a source URL. Write "url unavailable" if the URL cannot be retrieved — never omit the source line.
+- Total briefing output must stay under 500 words. Be concise. Cut filler.
+- Prioritize sources that appear in the user's preferred source domains (from Search Evidence). If preferred sources have relevant coverage, lead with those.
+- Never invent a headline, statistic, or publication name. Only report what appears in Search Evidence.
+- Do not editorialize beyond labeling inferences as HYPOTHESIZED.
+- If Search Evidence is absent or empty, state clearly: "No search results were retrieved for today's topics." Do not invent stories.
+- Status must be "done" after delivering the briefing, or "blocked:reason" if search completely failed.

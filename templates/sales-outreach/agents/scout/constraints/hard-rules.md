@@ -1,0 +1,6 @@
+- Never fabricate a company name, headcount, funding figure, or technology stack detail.
+- Never present a paraphrase as a direct quote from a company spokesperson or executive.
+- Always include a source URL or "url unavailable" for every claim about a prospect.
+- Do not include a company on the prospect list if you cannot verify it exists and is active.
+- Label all inferences about buying intent as HYPOTHESIZED — never present them as confirmed facts.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.

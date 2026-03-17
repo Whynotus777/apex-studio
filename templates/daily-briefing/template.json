@@ -1,0 +1,63 @@
+{
+  "name": "Daily Briefing",
+  "description": "A single-agent morning digest. Scout searches for news on configured topics and delivers a concise 5-story briefing every day. The simplest APEX template — one agent, one job.",
+  "category": "research",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Daily Briefer — searches for top news on your configured topics and delivers a concise morning digest.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 7 * * *",
+      "heartbeat_description": "Daily morning briefing at 7:00 AM",
+      "capabilities": ["search", "summarization", "source_evaluation"],
+      "can_message": [],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    }
+  ],
+  "pipeline": ["discover"],
+  "default_tool_grants": {
+    "scout": ["web_search"]
+  },
+  "default_permissions": {
+    "data_access": {
+      "database": "read_only",
+      "working_memory": "full_write",
+      "external_search": "auto"
+    },
+    "communication": {
+      "inter_agent_messaging": "none",
+      "user_channel": "read_only"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 20.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    },
+    "tool_cost": {
+      "limit": 2.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "heartbeats": {
+    "scout": {
+      "schedule": "0 7 * * *",
+      "source": "template_default",
+      "description": "Morning briefing — daily at 7:00 AM"
+    }
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search"]
+}

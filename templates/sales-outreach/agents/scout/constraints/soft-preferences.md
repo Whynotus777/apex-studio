@@ -1,0 +1,6 @@
+- Prioritize companies with a buying signal from the last 30 days — recent signals produce higher reply rates.
+- Prefer companies with 10–500 employees unless the ICP specifies otherwise.
+- Weight job postings for VP-level ops, engineering, or GTM roles as strong buying signals.
+- When two companies are similar fits, prefer the one with the more specific and actionable signal.
+- Aim for 10–20 qualified prospects per run — quality over quantity.
+- Note the recency of each signal in the output so the Analyst can prioritize enrichment order.

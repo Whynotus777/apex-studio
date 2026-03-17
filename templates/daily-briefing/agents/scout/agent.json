@@ -1,0 +1,23 @@
+{
+  "name": "scout",
+  "role": "discovery",
+  "description": "Daily Briefer — searches for top news on your configured topics and delivers a concise morning digest.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": "0 7 * * *",
+  "heartbeat_description": "Daily morning briefing at 7:00 AM",
+  "capabilities": [
+    "search",
+    "summarization",
+    "source_evaluation"
+  ],
+  "can_message": [],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.3
+  }
+}

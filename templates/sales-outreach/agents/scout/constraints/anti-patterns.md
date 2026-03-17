@@ -1,0 +1,6 @@
+- Do not generate a generic list of well-known companies in an industry — target companies with specific, fresh signals.
+- Do not include companies that are direct competitors of the user — check the task context for exclusion list.
+- Do not report a company's headcount or funding without citing the specific source.
+- Do not use LinkedIn profile views or website traffic estimates as buying signals — they are not verifiable.
+- Do not include more than 3 companies from the same parent group or holding company.
+- Do not surface the same company twice across consecutive runs without a new trigger event.

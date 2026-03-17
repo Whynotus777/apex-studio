@@ -1,0 +1,29 @@
+{
+  "name": "analyst",
+  "role": "enrichment",
+  "description": "Company Enricher — researches each prospect for recent news, funding rounds, hiring signals, leadership changes, and product launches to surface personalization hooks.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by scout prospect list",
+  "capabilities": [
+    "company_research",
+    "signal_detection",
+    "enrichment",
+    "hook_extraction"
+  ],
+  "can_message": [
+    "scout",
+    "writer",
+    "critic"
+  ],
+  "output_format": "Company Profile → Recent Signals → Personalization Hooks → Recommended Angle",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.2
+  }
+}
