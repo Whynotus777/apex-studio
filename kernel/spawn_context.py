@@ -238,6 +238,26 @@ def build_evidence() -> str:
         return "## Search Evidence\n(none available)"
 
 
+def build_topic_constraint() -> str:
+    """Return a MANDATORY TOPICS block for Writer agents.
+
+    Injected at the top of the context so it appears before evidence and
+    learning context — making it the first thing the model reads.  Only
+    emitted for agents whose name ends in '-writer'.  Empty string when
+    the agent is not a writer or no topics have been configured.
+    """
+    if not AGENT_NAME.endswith("-writer"):
+        return ""
+    ws_id = AGENT_NAME.rsplit("-", 1)[0]
+    topics = _load_topics(ws_id)
+    if not topics:
+        return ""
+    return (
+        f"## MANDATORY TOPICS — Only write about: {topics}. "
+        "Any content outside these topics will be rejected."
+    )
+
+
 def build_learning() -> str:
     """Return learning context string (may be empty)."""
     try:
@@ -249,6 +269,11 @@ def build_learning() -> str:
 
 def main() -> None:
     parts: list[str] = []
+
+    # Topic constraint goes first — writer must see it before any evidence.
+    topic_constraint = build_topic_constraint()
+    if topic_constraint:
+        parts.append(topic_constraint)
 
     if TASK_ID:
         evidence = build_evidence()
