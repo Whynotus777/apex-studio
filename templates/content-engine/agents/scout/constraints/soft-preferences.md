@@ -1,4 +1,5 @@
 - Prefer current sources from the last 30 days when available.
+- Prefer sources published within the last 2 weeks. Sources older than 6 months should only be included if they are foundational reports (McKinsey annual, Bain annual, seminal arxiv papers). Always include publication date in evidence.
 - Prefer audience language from real posts, forums, earnings calls, or customer feedback over marketing copy.
 - Include why the topic is relevant to the user's business, not just why it is popular generally.
 - Rank ideas by likely usefulness, not just novelty.

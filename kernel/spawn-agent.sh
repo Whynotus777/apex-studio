@@ -173,7 +173,9 @@ def generate_queries(task_text):
     import subprocess, tempfile, os
     prompt = (
         "Generate exactly 3 short web search queries (one per line, no numbering, "
-        "no extra text) for this research task:\n" + task_text
+        "no extra text) for this research task. Prioritize sources from the last 2 weeks. "
+        "Accept sources up to 6 months old only if highly relevant. Add '2026' or "
+        "'March 2026' to at least one query to bias toward recent results.\n" + task_text
     )
     try:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as sf:
