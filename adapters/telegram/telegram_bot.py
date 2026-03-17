@@ -1037,12 +1037,57 @@ async def _run_content_engine_chain(
     writer_state = writer_status.get("state", "") if isinstance(writer_status, dict) else str(writer_status)
     print(f"[DEBUG] writer done: status={writer_state} preview={writer_preview[:60]!r}", flush=True)
     chain_log.append({"agent": writer_agent, "status": writer_resp.get("status"), "action": writer_action})
+
+    # ── Step 2b: Humanize pass ─────────────────────────────────────────────
+    # A second Writer task rewrites the draft to strip AI-generated patterns.
+    # The humanized output replaces the original draft for Critic review.
+    await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🪄 Humanizing draft…")
+    if writer_preview:
+        humanize_desc = (
+            f"Workspace: {workspace_id}\n"
+            "HUMANIZE PASS: Rewrite the draft below to sound authentically human.\n\n"
+            "Rules:\n"
+            "- Remove all corporate language, buzzwords, and filler phrases\n"
+            "- Replace any bullet points or numbered lists with flowing paragraphs\n"
+            "- Add one specific personal observation that only someone who has done this would know\n"
+            "- Use a conversational tone — short sentences, real words, no jargon\n"
+            "- The reader should think 'this person has actually done this', not 'this person researched this'\n"
+            "- If another AI could detect this as AI-generated, it is not good enough\n\n"
+            f"Original draft:\n{writer_preview}"
+        )
+        if pref_platform and pref_platform in PLATFORM_INSTRUCTIONS:
+            humanize_desc += f"\n\n## Platform Instructions ({pref_platform.upper()})\n{PLATFORM_INSTRUCTIONS[pref_platform]}"
+        try:
+            humanize_task_id = kernel.create_task({
+                "goal_id": goal_id,
+                "title": f"[Humanize] {mission}",
+                "description": humanize_desc,
+                "status": "backlog",
+            })
+            kernel.assign_task(humanize_task_id, writer_agent)
+            print(f"[DEBUG] humanize task={humanize_task_id}", flush=True)
+            humanize_resp = await loop.run_in_executor(None, kernel.spawn_agent, writer_agent, humanize_task_id)
+            humanized = str(humanize_resp.get("proposed_output") or "").strip()
+            if humanized:
+                writer_preview = humanized
+                writer_task_id = humanize_task_id
+                chain_log.append({
+                    "agent": writer_agent,
+                    "status": humanize_resp.get("status"),
+                    "action": "Humanized draft",
+                })
+                print(f"[DEBUG] humanize done: preview={writer_preview[:60]!r}", flush=True)
+            else:
+                print("[DEBUG] humanize returned empty — keeping original draft", flush=True)
+        except Exception as exc:
+            print(f"[DEBUG] humanize pass failed (non-fatal): {exc}", flush=True)
+
     # Store full draft for "Read Full Draft" button retrieval
     if writer_preview:
         _draft_store[writer_task_id] = writer_preview
 
     # ── Step 3: Critic (+ 1 revision loop if REVISE) ──────────────────────
-    await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🔍 Running Critic…")
+    await _safe_reply(message, f"🪄 Humanize done\n🔍 Running Critic…")
     print(f"[DEBUG] critic start: writer_task={writer_task_id}", flush=True)
     try:
         review = await _handle_critic_chain(writer_task_id, workspace_id, message, emit_message=False)

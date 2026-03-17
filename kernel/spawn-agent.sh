@@ -267,6 +267,15 @@ PYEOF
     echo ""
     echo "$SEARCH_EVIDENCE"
   fi
+
+  # Learning context injection
+  LEARNING_CONTEXT=$(APEX_HOME="$APEX_HOME" APEX_DB="$DB" \
+    python3 "$APEX_HOME/kernel/learning_loader.py" "$AGENT_NAME" "$TASK_ID" 2>/dev/null) \
+    || LEARNING_CONTEXT=""
+  if [ -n "$LEARNING_CONTEXT" ]; then
+    echo ""
+    echo "$LEARNING_CONTEXT"
+  fi
 } > "$TMP_DIR/user_prompt.txt"
 
 ###############################################################################

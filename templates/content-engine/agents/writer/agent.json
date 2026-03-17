@@ -1,7 +1,7 @@
 {
   "name": "writer",
   "role": "creation",
-  "description": "Content Creator \u2014 drafts posts, articles, captions, and campaign concepts matched to the user's voice.",
+  "description": "Content Creator \u2014 drafts posts, articles, captions, and campaign concepts matched to the user's voice. Always check for Voice Reference and Platform Instructions sections in your prompt and follow them precisely.",
   "model": {
     "primary": "gemini-3-flash-preview",
     "fallback": "qwen3.5-apex",

@@ -58,6 +58,11 @@ def get_pending_reviews():
             r.created_at ASC
     """)
 
+def _is_writer_review(agent_name):
+    """True when reviewing a writer agent — enables authenticity scoring."""
+    return "writer" in agent_name.lower()
+
+
 def build_critic_prompt(review):
     """Build system and user prompts for the Critic."""
     stakes = review["stakes"] or "low"
@@ -66,6 +71,7 @@ def build_critic_prompt(review):
     task_title = review["task_title"] or "(no title)"
     task_desc = review["task_desc"] or "(no description)"
     goal_name = review["goal_name"] or "(no goal)"
+    writer_review = _is_writer_review(agent_name)
 
     # Load critic hard rules
     rules_path = os.path.join(APEX_HOME, "templates", "startup-chief-of-staff", "agents", "critic", "constraints", "hard-rules.md")
@@ -73,6 +79,18 @@ def build_critic_prompt(review):
     if os.path.exists(rules_path):
         with open(rules_path) as f:
             hard_rules = f.read()
+
+    authenticity_rubric = ""
+    authenticity_schema = ""
+    authenticity_verdict_rule = ""
+    if writer_review:
+        authenticity_rubric = """7. AUTHENTICITY: Does the post read like a real expert sharing genuine insight, or does it read as AI-generated?
+   - 5 = reads like a real person sharing a specific experience or observation — no AI tells
+   - 3 = competent but generic; could have been written by anyone about anything
+   - 1 = obviously AI-generated: buzzword-heavy, bullet-point structure, no personal voice, grand declarations
+   Signals of AI text to penalise: numbered/bulleted lists, phrases like "delve into", "game-changer", "unlock potential", "leverage", "ecosystem", "transformative", "in today's landscape", starting with a grand statement, no concrete personal detail."""
+        authenticity_schema = '\n    "authenticity": <1-5>,'
+        authenticity_verdict_rule = "\n- If authenticity < 3: force REVISE regardless of other scores"
 
     system_prompt = f"""You are Critic, the quality gate for APEX venture studio.
 You are reviewing output from the {agent_name} agent.
@@ -85,6 +103,7 @@ Your rubric:
 4. CONCISENESS: Is it as short as possible without losing substance?
 5. HARD RULE COMPLIANCE: Does it violate any agent hard rules?
 6. GROUNDING: Does the agent only claim actions it actually performed?
+{authenticity_rubric}
 
 Hard rules:
 {hard_rules}
@@ -99,7 +118,7 @@ Respond with ONLY a valid JSON object:
     "actionability": <1-5>,
     "conciseness": <1-5>,
     "hard_rule_compliance": <1-5>,
-    "grounding": <1-5>
+    "grounding": <1-5>{authenticity_schema}
   }},
   "overall_score": <1.0-5.0>,
   "verdict": "PASS|REVISE|BLOCK",
@@ -111,7 +130,7 @@ Respond with ONLY a valid JSON object:
 Verdict rules:
 - PASS: overall >= 3.5 and no hard rule violations
 - REVISE: overall >= 2.5 or minor issues that can be fixed
-- BLOCK: overall < 2.5 or hard rule violations found"""
+- BLOCK: overall < 2.5 or hard rule violations found{authenticity_verdict_rule}"""
 
     user_prompt = f"""Review this output:
 
@@ -249,6 +268,20 @@ def process_review(review, dry_run=False):
     if grounding:
         print(f"  Grounding issues: {grounding}")
     print(f"  Feedback: {feedback[:200]}")
+
+    # Authenticity gate — force REVISE for writer reviews with low authenticity score
+    if _is_writer_review(agent_name):
+        authenticity_score = scores.get("authenticity")
+        if authenticity_score is not None and float(authenticity_score) < 3:
+            verdict = "REVISE"
+            feedback = (
+                f"Post reads as AI-generated (authenticity score: {authenticity_score}/5). "
+                "Rewrite with personal voice, remove buzzwords, add a specific observation "
+                "or experience that only someone who has done this would know."
+            )
+            parsed["verdict"] = verdict
+            parsed["feedback"] = feedback
+            print(f"  Override: authenticity={authenticity_score} < 3 → forced REVISE")
 
     evidence_verification = verify_agent_output(task_id, review.get("agent_output", "") or "", DB_PATH)
     grounding_score = float(evidence_verification.get("grounding_score", 1.0))
