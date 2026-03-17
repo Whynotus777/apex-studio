@@ -161,7 +161,7 @@ fi
   # Context injection (evidence + learning) — single Python process
   if [ -n "$TASK_ID" ]; then
     SPAWN_CONTEXT=$(APEX_HOME="$APEX_HOME" APEX_DB="$DB" APEX_AGENT="$AGENT_NAME" APEX_TASK="$TASK_ID" \
-      python3 "$APEX_HOME/kernel/spawn_context.py" 2>/dev/null) || SPAWN_CONTEXT=""
+      python3 "$APEX_HOME/kernel/spawn_context.py") || SPAWN_CONTEXT=""
     if [ -n "$SPAWN_CONTEXT" ]; then
       echo ""
       echo "$SPAWN_CONTEXT"
