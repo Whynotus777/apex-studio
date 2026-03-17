@@ -498,10 +498,33 @@ Three layers of learning, each preserving user data privacy.
 ### Layer 1: Individual Agent Learning (Per Workspace)
 Agents accumulate preferences and patterns within a user's workspace.
 
-**Feedback signals:**
-- User approves a draft → store: "this tone/structure/length worked"
-- User rejects and edits → store the diff as preference signal ("user prefers bold over neutral, short over long")
-- Critic scores → track which agent behaviors produce higher scores over time
+**Source preferences (Scout):**
+- User sets preferred sources: arxiv, GitHub, McKinsey, Bain, Economist
+- Scout prioritizes these in search queries
+- Over time, tracks which sources get approved vs rejected and auto-adjusts
+
+**Voice & style (Writer):**
+- User imports 5-10 of their best posts per platform → stored as voice samples
+- Edit feedback loop: diff between Writer's draft and user's edit stored as style correction
+- Explicit preferences: tone, length, hook style, hashtag usage, emoji patterns
+- After 10 edits, Writer has a strong model of user's preferences
+
+**Platform-specific optimization:**
+Every platform has different rules for what works:
+
+| | LinkedIn | X (Twitter) | TikTok | Instagram |
+|---|---|---|---|---|
+| Format | Long-form, carousels | Short tweets, threads | 15-60s video scripts | Captions + visual concepts |
+| Tone | Professional authority | Sharp, provocative | Casual educational | Visual-first, aspirational |
+| Length | 1000-2000 chars | 280 per tweet | 50-150 word scripts | Under 300 chars |
+| Hook | Contrarian stat | Hot take | Visual hook in 0.5s | Visual-first |
+| Optimize | Comments, saves | Reposts, replies | Watch time, shares | Saves, reach |
+| Frequency | 1-2/day | 3-5/day | 1-2/day | 1-2/day |
+
+Each workspace stores platform profiles with format rules, tone, and optimization mode. Writer gets platform-specific instructions injected into prompt. Critic adjusts scoring rubric per platform (TikTok Critic weighs hook strength higher, LinkedIn Critic weighs depth of insight higher).
+
+**Performance feedback loop:**
+After posting, track engagement via platform APIs (user's OAuth token). Each post gets a performance score relative to user's baseline. System extracts patterns from top performers: topic, structure, hook style, sources cited, posting time. Feeds back into Scout (source rankings), Writer (format preferences), and Critic (quality thresholds).
 
 **Auto-experiment loop (Karpathy autoresearch pattern):**
 
