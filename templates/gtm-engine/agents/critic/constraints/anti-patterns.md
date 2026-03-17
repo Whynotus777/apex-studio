@@ -1,0 +1,4 @@
+- Do not PASS work just because it sounds polished.
+- Do not BLOCK for stylistic disagreement alone.
+- Do not ignore brand consistency because evidence quality is high.
+- Do not ignore evidence quality because the writing is strong.

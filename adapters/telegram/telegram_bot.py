@@ -436,9 +436,15 @@ def _content_engine_operator_card(
     task_id: str,
     chain_log: list[dict[str, Any]],
     writer_preview: str,
+    scout_task_id: str | None = None,
 ) -> str:
     preview = _summarise(writer_preview.strip(), 280) if writer_preview.strip() else "No draft preview available."
-    sources = _dedupe_sources(task_id)
+    # Evidence is stored under Scout's task_id; Writer task has no evidence rows.
+    evidence_task_id = scout_task_id if scout_task_id else task_id
+    sources = _dedupe_sources(evidence_task_id)
+    # Fallback: also check writer task_id in case evidence was stored there
+    if not sources and evidence_task_id != task_id:
+        sources = _dedupe_sources(task_id)
     source_lines = [f"• {source['title']}" for source in sources[:3]]
     sources_block = "\n".join(source_lines) if source_lines else "• No verified sources"
     lines = [
@@ -959,7 +965,7 @@ async def _run_content_engine_chain(
     print(f"[DEBUG] writer done: status={writer_state} preview={writer_preview[:60]!r}", flush=True)
     chain_log.append({"agent": writer_agent, "status": writer_resp.get("status"), "action": writer_action})
 
-    # ── Step 3: Critic ─────────────────────────────────────────────────────
+    # ── Step 3: Critic (+ 1 revision loop if REVISE) ──────────────────────
     await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🔍 Running Critic…")
     print(f"[DEBUG] critic start: writer_task={writer_task_id}", flush=True)
     try:
@@ -973,12 +979,84 @@ async def _run_content_engine_chain(
         return
     print(f"[DEBUG] critic done: review={'None' if review is None else review.get('verdict')}", flush=True)
 
-    if review is not None:
+    # ── Step 3b: Revision loop (capped at 1 pass) ─────────────────────────
+    if review is not None and (review.get("verdict") or "").upper() == "REVISE":
         chain_log.append({
             "agent": f"{workspace_id}-critic",
-            "status": review.get("verdict"),
+            "status": "REVISE",
             "action": _infer_critic_action(review, writer_task_id),
         })
+        # Extract feedback to inject into revision prompt
+        feedback_data = _normalize_review_feedback(review.get("feedback"))
+        critic_feedback = (
+            feedback_data.get("feedback")
+            or feedback_data.get("summary")
+            or str(review.get("feedback") or "")
+        )
+        await _safe_reply(
+            message,
+            f"🔄 Critic requested revision → Writer revising → Critic re-reviewing\n"
+            f"_{_summarise(critic_feedback, 120)}_",
+            parse_mode="Markdown",
+        )
+
+        # Create a new Writer task with Critic feedback injected
+        try:
+            revision_task_id = kernel.create_task({
+                "goal_id": goal_id,
+                "title": mission,
+                "description": (
+                    f"Workspace: {workspace_id}\n"
+                    f"REVISION REQUEST from Critic: {critic_feedback}\n\n"
+                    f"Based on Scout research for: {scout_task_id}\n"
+                    f"Previous draft task: {writer_task_id}\n"
+                    "Address all Critic feedback. Use all available Search Evidence."
+                ),
+                "status": "backlog",
+            })
+            kernel.assign_task(revision_task_id, writer_agent)
+        except Exception as exc:
+            print(f"[DEBUG] revision task creation failed: {exc}", flush=True)
+            await _safe_reply(message, f"⚠️ Revision task creation failed: {exc}")
+            # Fall through with original review
+        else:
+            try:
+                rev_resp = await loop.run_in_executor(None, kernel.spawn_agent, writer_agent, revision_task_id)
+            except Exception as exc:
+                print(f"[DEBUG] revision writer spawn failed: {exc}", flush=True)
+                await _safe_reply(message, f"⚠️ Revision writer failed: {exc}")
+            else:
+                writer_preview = str(rev_resp.get("proposed_output") or writer_preview)
+                writer_task_id = revision_task_id  # Critic will review the revised task
+                rev_action = _infer_writer_action(rev_resp)
+                print(f"[DEBUG] revision writer done: preview={writer_preview[:60]!r}", flush=True)
+                chain_log.append({"agent": writer_agent, "status": rev_resp.get("status"), "action": f"Revised — {rev_action}"})
+
+                # Re-run Critic on the revised task
+                try:
+                    review = await _handle_critic_chain(writer_task_id, workspace_id, message, emit_message=False)
+                    print(f"[DEBUG] re-critic done: verdict={review.get('verdict') if review else 'None'}", flush=True)
+                    if review is not None:
+                        chain_log.append({
+                            "agent": f"{workspace_id}-critic",
+                            "status": review.get("verdict"),
+                            "action": _infer_critic_action(review, writer_task_id),
+                        })
+                except Exception as exc:
+                    print(f"[DEBUG] re-critic failed: {exc}", flush=True)
+                    review = None
+
+    if review is not None:
+        # Only append Critic to chain_log if not already appended above
+        if not any(
+            step.get("agent") == f"{workspace_id}-critic"
+            for step in chain_log
+        ):
+            chain_log.append({
+                "agent": f"{workspace_id}-critic",
+                "status": review.get("verdict"),
+                "action": _infer_critic_action(review, writer_task_id),
+            })
         review_id = review.get("id")
         reply_markup = None
         if review_id is not None:
@@ -988,7 +1066,7 @@ async def _run_content_engine_chain(
                 InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
             ]])
         try:
-            card = _content_engine_operator_card(writer_task_id, chain_log, writer_preview)
+            card = _content_engine_operator_card(writer_task_id, chain_log, writer_preview, scout_task_id=scout_task_id)
             print(f"[DEBUG] operator card ({len(card)} chars): {card[:100]!r}", flush=True)
             await message.reply_text(card, reply_markup=reply_markup)
         except Exception as exc:
@@ -1305,7 +1383,10 @@ async def handle_callback(update: Update, context: Any) -> None:
     if action == "approve_review":
         try:
             kernel.approve_action(int(value))
-            await query.edit_message_text(f"✅ Approved review #{value}")
+            # Edit the card to show approval confirmation (strip buttons)
+            original_text = query.message.text or ""
+            approved_text = original_text + "\n\n✅ Approved and queued."
+            await query.edit_message_text(approved_text)
         except Exception as exc:
             await query.message.reply_text(f"Approval failed: {exc}")
         return
@@ -1313,7 +1394,9 @@ async def handle_callback(update: Update, context: Any) -> None:
     if action == "reject_review":
         try:
             kernel.reject_action(int(value), "Rejected via Telegram")
-            await query.edit_message_text(f"❌ Rejected review #{value}")
+            original_text = query.message.text or ""
+            rejected_text = original_text + "\n\n❌ Rejected. Draft discarded."
+            await query.edit_message_text(rejected_text)
         except Exception as exc:
             await query.message.reply_text(f"Rejection failed: {exc}")
         return
@@ -1321,7 +1404,9 @@ async def handle_callback(update: Update, context: Any) -> None:
     if action == "edit_review":
         try:
             kernel.reject_action(int(value), "Edit requested via Telegram")
-            await query.edit_message_text(f"✏️ Sent back for edit on review #{value}")
+            original_text = query.message.text or ""
+            edit_text = original_text + "\n\n✏️ Sent back for revision."
+            await query.edit_message_text(edit_text)
         except Exception as exc:
             await query.message.reply_text(f"Edit request failed: {exc}")
         return

@@ -1,0 +1,4 @@
+- Prefer REVISE over BLOCK unless there is a clear integrity or approval violation.
+- Reward work that is specific, differentiated, and useful to an operator.
+- Flag fuzzy positioning or unsupported copy as REVISE, not BLOCK, when fixable.
+- Note what is strong as well as what needs revision.

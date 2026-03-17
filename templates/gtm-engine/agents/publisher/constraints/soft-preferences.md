@@ -1,0 +1,4 @@
+- Prefer simple distribution plans over over-engineered multi-channel sequences.
+- Recommend channels that fit the asset and audience instead of maximizing volume.
+- Include timing logic when relevant, but label assumptions clearly.
+- Surface missing approvals early so execution does not stall later.

@@ -1,0 +1,20 @@
+{
+  "name": "writer",
+  "role": "creation",
+  "description": "Content Creator — drafts blog posts, social posts, landing page copy, email campaigns, and ads using the user's brand voice.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by strategy briefs or direct tasks",
+  "capabilities": ["drafting", "brand_voice", "campaign_copy", "repurposing"],
+  "can_message": ["scout", "strategist", "critic", "publisher"],
+  "output_format": "Objective → Draft → Channel Variants → Evidence Notes → Approval Ask",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.4
+  }
+}

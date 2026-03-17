@@ -1,0 +1,161 @@
+{
+  "name": "GTM Engine",
+  "description": "A five-agent go-to-market operations team for market research, positioning, content creation, quality review, and approval-gated distribution planning.",
+  "category": "gtm",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Market Researcher — monitors competitors, finds market trends, and tracks industry news.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 */6 * * *",
+      "heartbeat_description": "Market scan every 6 hours",
+      "capabilities": ["search", "competitor_monitoring", "trend_detection", "evidence_collection"],
+      "can_message": ["strategist", "writer", "critic", "publisher"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "strategist",
+      "role": "positioning",
+      "description": "Positioning & Messaging — analyzes research, develops positioning, recommends campaign angles, and drafts messaging frameworks.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by Scout findings or campaign tasks",
+      "capabilities": ["positioning", "messaging", "campaign_planning", "synthesis"],
+      "can_message": ["scout", "writer", "critic", "publisher"],
+      "output_format": "Market Context → Positioning Thesis → Messaging Pillars → Campaign Angles → Evidence References",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.25
+      }
+    },
+    {
+      "name": "writer",
+      "role": "creation",
+      "description": "Content Creator — drafts blog posts, social posts, landing page copy, email campaigns, and ads using the user's brand voice.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by strategy briefs or direct tasks",
+      "capabilities": ["drafting", "brand_voice", "campaign_copy", "repurposing"],
+      "can_message": ["scout", "strategist", "critic", "publisher"],
+      "output_format": "Objective → Draft → Channel Variants → Evidence Notes → Approval Ask",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.4
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Quality Gate — reviews GTM output for brand consistency, claim accuracy, evidence grounding, and approval compliance.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "api_review": "claude-opus",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as items arrive",
+      "capabilities": ["review", "brand_check", "claim_validation", "grounding_review", "blocking"],
+      "can_message": ["scout", "strategist", "writer", "publisher"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    },
+    {
+      "name": "publisher",
+      "role": "distribution",
+      "description": "Distribution Manager — recommends publishing schedules, suggests channels, and tracks what has been published without executing external actions unless approved.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 9 * * *",
+      "heartbeat_description": "Daily distribution plan review at 9:00 AM",
+      "capabilities": ["distribution_planning", "channel_selection", "calendar_management", "tracking"],
+      "can_message": ["scout", "strategist", "writer", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    }
+  ],
+  "pipeline": ["discover", "strategize", "create", "review", "publish"],
+  "default_permissions": {
+    "autonomy": {
+      "content_drafting": "draft",
+      "external_publishing": "approval_required",
+      "high_stakes_actions": "human_approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "user_channel": "read_only"
+    },
+    "data_access": {
+      "working_memory": "full_write",
+      "external_search": "approval_required",
+      "publishing_systems": "read_only"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 120.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    },
+    "tool_cost": {
+      "limit": 10.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "default_tool_grants": {
+    "scout": ["web_search"],
+    "strategist": ["web_search"]
+  },
+  "heartbeats": {
+    "scout": {
+      "schedule": "0 */6 * * *",
+      "source": "template_default",
+      "description": "Market scan — every 6 hours"
+    },
+    "strategist": null,
+    "writer": null,
+    "critic": null,
+    "publisher": {
+      "schedule": "0 9 * * *",
+      "source": "template_default",
+      "description": "Distribution review — daily at 9:00 AM"
+    }
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search", "linkedin", "twitter", "email"]
+}

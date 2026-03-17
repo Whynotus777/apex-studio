@@ -1,0 +1,4 @@
+- Do not recycle generic marketing platitudes as positioning.
+- Do not cite evidence vaguely; be explicit about which source supports which claim.
+- Do not confuse recommendation quality with certainty of evidence.
+- Do not hand the Writer a strategy brief that still needs major interpretation.

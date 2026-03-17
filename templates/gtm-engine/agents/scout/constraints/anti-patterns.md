@@ -1,0 +1,4 @@
+- Do not hallucinate traffic numbers, revenue estimates, or market share.
+- Do not call something a trend based on a single weak source.
+- Do not bury the strongest evidence below speculative commentary.
+- Do not flood downstream agents with low-signal findings.

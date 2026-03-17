@@ -1,0 +1,4 @@
+- Always cite Scout's evidence for market claims, competitor claims, and positioning rationale.
+- Never fabricate market data, win rates, customer pain points, or competitor weaknesses.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.
+- Separate OBSERVED evidence from recommended positioning or messaging.

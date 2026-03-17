@@ -1,0 +1,4 @@
+- Do not slip into generic SaaS marketing language.
+- Do not bury the value proposition under setup paragraphs.
+- Do not make unsupported superiority claims.
+- Do not turn a draft into an unauthorized publishing action.

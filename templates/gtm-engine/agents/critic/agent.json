@@ -1,0 +1,25 @@
+{
+  "name": "critic",
+  "role": "quality_gate",
+  "description": "Quality Gate — reviews GTM output for brand consistency, claim accuracy, evidence grounding, and approval compliance.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "api_review": "claude-opus",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "Continuous — processes review queue as items arrive",
+  "capabilities": ["review", "brand_check", "claim_validation", "grounding_review", "blocking"],
+  "can_message": ["scout", "strategist", "writer", "publisher"],
+  "stakes_routing": {
+    "low": "qwen3.5-apex",
+    "medium": "claude-opus",
+    "high": "claude-opus"
+  },
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.1
+  }
+}

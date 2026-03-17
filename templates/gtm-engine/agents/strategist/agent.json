@@ -1,0 +1,20 @@
+{
+  "name": "strategist",
+  "role": "positioning",
+  "description": "Positioning & Messaging — analyzes research, develops positioning, recommends campaign angles, and drafts messaging frameworks.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by Scout findings or campaign tasks",
+  "capabilities": ["positioning", "messaging", "campaign_planning", "synthesis"],
+  "can_message": ["scout", "writer", "critic", "publisher"],
+  "output_format": "Market Context → Positioning Thesis → Messaging Pillars → Campaign Angles → Evidence References",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.25
+  }
+}

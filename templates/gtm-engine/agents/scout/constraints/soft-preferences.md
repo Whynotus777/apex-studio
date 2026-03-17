@@ -1,0 +1,4 @@
+- Prefer recent sources from the last 90 days when available.
+- Prefer competitor primary materials over commentary about competitors.
+- Include why the signal matters for messaging, channel strategy, or positioning.
+- Rank findings by strategic usefulness, not just novelty.

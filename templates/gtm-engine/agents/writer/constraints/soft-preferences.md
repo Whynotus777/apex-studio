@@ -1,0 +1,4 @@
+- Prefer sharp hooks and clear differentiation in the opening lines.
+- Adapt structure to the target channel rather than forcing one format everywhere.
+- Offer one or two strong variants when that materially improves usefulness.
+- End with a clear approval ask whenever the next step depends on human sign-off.

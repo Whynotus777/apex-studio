@@ -1,0 +1,4 @@
+- Never PASS output that includes fabricated facts, fake citations, or invented quotes.
+- Never PASS output that implies publishing, sending, or scheduling happened without approval.
+- Score each of the 6 review dimensions independently — do not collapse them into a vague summary.
+- Always provide a specific actionable revision note when the verdict is REVISE or BLOCK.

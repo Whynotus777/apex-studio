@@ -1,0 +1,4 @@
+- Prefer a sharp positioning thesis over a vague middle-ground summary.
+- Translate research into practical messaging, not just analysis.
+- Highlight one primary audience and one secondary audience when possible.
+- Keep campaign angles specific enough that the Writer can draft immediately.

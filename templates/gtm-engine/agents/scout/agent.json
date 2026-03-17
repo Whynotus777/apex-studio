@@ -1,0 +1,19 @@
+{
+  "name": "scout",
+  "role": "discovery",
+  "description": "Market Researcher — monitors competitors, finds market trends, and tracks industry news.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": "0 */6 * * *",
+  "heartbeat_description": "Market scan every 6 hours",
+  "capabilities": ["search", "competitor_monitoring", "trend_detection", "evidence_collection"],
+  "can_message": ["strategist", "writer", "critic", "publisher"],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.3
+  }
+}
