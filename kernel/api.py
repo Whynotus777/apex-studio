@@ -1185,35 +1185,50 @@ class ApexKernel:
                     )
                     budgets_applied += 1
 
-        # Auto-grant tool access for integrations listed in the manifest
-        _SEARCH_GRANT_ROLES = {"scout", "analyst"}
+        # Auto-grant tool access based on manifest's default_tool_grants.
+        # Falls back to granting web_search to scout/analyst when the field is absent
+        # (backward compatibility with older templates that predate default_tool_grants).
+        default_tool_grants: dict[str, list[str]] = manifest.get("default_tool_grants") or {}
         all_integrations = (
             set(manifest.get("integrations", []))
             | set(manifest.get("optional_integrations", []))
         )
+        # Collect every tool that will be needed so we can ensure the tools row exists.
+        tools_to_register: set[str] = set()
+        if default_tool_grants:
+            for tools in default_tool_grants.values():
+                tools_to_register.update(tools)
+        elif "web_search" in all_integrations:
+            # Legacy fallback: grant web_search to scout and analyst implicitly.
+            default_tool_grants = {"scout": ["web_search"], "analyst": ["web_search"]}
+            tools_to_register.add("web_search")
+
         tools_granted: list[str] = []
-        if "web_search" in all_integrations:
+        if tools_to_register:
             with self._connect() as conn:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO tools
-                        (id, name, adapter, auth_method, scopes, read_write, cost_per_call, approval_required)
-                    VALUES ('web_search', 'Web Search', 'adapters.tools.web_search.search',
-                            'none', '["search","research","evidence"]', 'read_only', 0, 0)
-                    """,
-                )
-                for agent_cfg in manifest.get("agents", []):
-                    tmpl_name = str(agent_cfg.get("name") or "").strip()
-                    if tmpl_name not in _SEARCH_GRANT_ROLES:
-                        continue
-                    agent_id = tmpl_name if global_mode else f"{workspace_id}-{tmpl_name}"
+                if "web_search" in tools_to_register:
                     conn.execute(
                         """
-                        INSERT OR IGNORE INTO tool_grants (agent_id, tool_id, permission_level)
-                        VALUES (?, 'web_search', 'read_only')
+                        INSERT OR IGNORE INTO tools
+                            (id, name, adapter, auth_method, scopes, read_write, cost_per_call, approval_required)
+                        VALUES ('web_search', 'Web Search', 'adapters.tools.web_search.search',
+                                'none', '["search","research","evidence"]', 'read_only', 0, 0)
                         """,
-                        (agent_id,),
                     )
+                for agent_cfg in manifest.get("agents", []):
+                    tmpl_name = str(agent_cfg.get("name") or "").strip()
+                    granted_tools = default_tool_grants.get(tmpl_name, [])
+                    if not granted_tools:
+                        continue
+                    agent_id = tmpl_name if global_mode else f"{workspace_id}-{tmpl_name}"
+                    for tool_id in granted_tools:
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO tool_grants (agent_id, tool_id, permission_level)
+                            VALUES (?, ?, 'read_only')
+                            """,
+                            (agent_id, tool_id),
+                        )
                     tools_granted.append(agent_id)
                 conn.commit()
 
