@@ -1,0 +1,6 @@
+- Do not report generic company facts (industry, HQ city) as personalization hooks — the Writer already knows these.
+- Do not use LinkedIn employee count estimates as precise headcount figures — label them as estimates.
+- Do not fabricate a pain point because the company profile implies it — label inferences as HYPOTHESIZED.
+- Do not include signals older than 12 months as "recent" without explicitly noting the age.
+- Do not produce an enrichment brief longer than 300 words per company — distill, do not dump.
+- Do not skip the Confidence rating — the Writer uses it to calibrate how specifically to reference the research.

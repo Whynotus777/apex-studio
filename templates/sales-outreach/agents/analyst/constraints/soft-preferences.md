@@ -1,0 +1,6 @@
+- Prioritize signals from the last 30 days — recency is the strongest predictor of reply rate.
+- Weight executive hire announcements and funding rounds highest as personalization hooks.
+- If a company's job postings reveal a specific pain point (e.g., "scaling ops team"), include that as a hook.
+- When multiple signals exist, pick the two most specific and actionable for the Writer — do not dump everything.
+- Rate each company's enrichment confidence (HIGH / MEDIUM / LOW) so the Writer knows how much to lean on the research.
+- Flag companies with LOW confidence to Scout for a re-run before the Writer drafts.

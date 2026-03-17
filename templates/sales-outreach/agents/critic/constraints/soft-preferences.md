@@ -1,0 +1,5 @@
+- Pay special attention to the first sentence — it determines whether the email reads as genuinely personalized or templated.
+- When issuing REVISE, always cite the specific line that needs changing — not just the category.
+- Flag any claim about a funding round, headcount, or executive name that cannot be verified against the Analyst's sources, even if it sounds accurate.
+- Score personalization quality relative to the Analyst's confidence rating — HIGH confidence enrichment justifies more specific claims.
+- If the email could apply to any company in the industry with a name swap, personalization scores 1–2 regardless of other quality.

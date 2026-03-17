@@ -101,7 +101,7 @@ def generate_queries(task_title: str, task_text: str) -> list[str]:
         ]
         # Strip any site: operators the model may have generated despite instructions.
         # This is defense-in-depth: DuckDuckGo returns 0 results for site: queries.
-        cleaned = [_strip_site_operators(q) for q in lines if line.strip()]
+        cleaned = [_strip_site_operators(q) for q in lines if q.strip()]
         # Drop queries that became empty after stripping
         cleaned = [q for q in cleaned if q]
         return cleaned[:3] if cleaned else fallback

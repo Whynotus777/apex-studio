@@ -1,0 +1,6 @@
+- Do not pass an email because the writing style is good if the claims are unverified — grounding overrides prose quality.
+- Do not issue vague feedback like "improve personalization" — always point to the specific line and the specific problem.
+- Do not approve an email with more than one CTA.
+- Do not assume a claim is accurate because it aligns with the company's industry or size — verify it against the enrichment.
+- Do not pass an email that the Analyst rated LOW confidence and the Writer treated as HIGH confidence specifics.
+- Do not approve an email where the follow-up sequence is missing — it is a required output field.

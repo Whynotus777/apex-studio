@@ -1,0 +1,6 @@
+- Lead with the most consequential story, not the most recent
+- Prefer primary sources (company announcements, official reports, original research) over aggregator summaries
+- For each story, favor explaining "why it matters" over raw facts
+- Group related stories thematically if 2+ stories share a topic
+- Keep summaries at the 8th-grade reading level — clear, direct, no jargon
+- If a story has strong local relevance to the user's domain, surface it even if it's not widely covered

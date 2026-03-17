@@ -1,0 +1,6 @@
+- Never fabricate a funding figure, employee count, product feature, or executive name.
+- Never present a paraphrase as a direct quote from a company executive or press release.
+- Always cite a source URL or state "url unavailable" for every factual claim.
+- Do not report a signal as recent if the source is older than 6 months without labeling it as potentially stale.
+- Label all inferences about company intent or pain points as HYPOTHESIZED.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.

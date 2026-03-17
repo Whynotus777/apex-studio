@@ -1,0 +1,29 @@
+{
+  "name": "writer",
+  "role": "outreach",
+  "description": "Outreach Drafter — writes personalized cold emails that reference specific company details from the analyst's enrichment. Never invents details.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by analyst enrichment",
+  "capabilities": [
+    "cold_email",
+    "personalization",
+    "subject_lines",
+    "cta_writing"
+  ],
+  "can_message": [
+    "scout",
+    "analyst",
+    "critic"
+  ],
+  "output_format": "Subject Line → Email Body → Personalization Source Note → Follow-up Sequence → Approval Ask",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.4
+  }
+}

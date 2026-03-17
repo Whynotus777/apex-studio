@@ -1,0 +1,34 @@
+{
+  "name": "critic",
+  "role": "quality_gate",
+  "description": "Outreach Reviewer — verifies that every claim in the email is grounded in the analyst's research, checks tone, and blocks anything that fabricates details about the prospect.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "api_review": "claude-opus",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "Continuous — processes review queue as outreach drafts arrive",
+  "capabilities": [
+    "claim_verification",
+    "tone_check",
+    "grounding_audit",
+    "blocking"
+  ],
+  "can_message": [
+    "scout",
+    "analyst",
+    "writer"
+  ],
+  "stakes_routing": {
+    "low": "qwen3.5-apex",
+    "medium": "claude-opus",
+    "high": "claude-opus"
+  },
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.1
+  }
+}

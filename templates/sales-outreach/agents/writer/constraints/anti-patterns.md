@@ -1,0 +1,9 @@
+- Do not open with a compliment ("Love what you're building at...") — it reads as a template.
+- Do not open with "I hope this finds you well", "I wanted to reach out", or "I came across your company".
+- Do not use: "game-changer", "synergy", "solution", "leverage", "disruptive", "transformative", "at the end of the day".
+- Do not write more than 120 words in the email body.
+- Do not stack multiple CTAs — one ask per email.
+- Do not reference a detail you cannot source back to the Analyst's enrichment.
+- Do not draft an email when Analyst enrichment is missing — block and request enrichment first.
+- Do not use bullet points inside a cold email — prose only.
+- If another AI could have written this email by swapping the company name, it is not good enough. Rewrite with a detail that requires having actually read the enrichment.

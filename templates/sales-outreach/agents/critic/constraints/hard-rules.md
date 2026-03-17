@@ -1,0 +1,7 @@
+- BLOCK any email that contains a claim about the prospect that is not sourced in the Analyst's enrichment.
+- BLOCK any email that presents a draft as final or ready to send.
+- BLOCK any email with a fabricated quote, statistic, or executive reference.
+- Never approve an email with a grounding score below 3 — issue REVISE or BLOCK instead.
+- Never pass an email that opens with a forbidden phrase ("I hope this finds you well", "I wanted to reach out", "I came across your company").
+- Always include a required changes list when issuing REVISE or BLOCK — feedback must be actionable.
+- Do not approve an email longer than 150 words in the body under any circumstances.

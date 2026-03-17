@@ -1,0 +1,7 @@
+- Lead with the signal, not the pitch — the first line should show you did your homework.
+- Keep emails under 120 words — every additional sentence reduces reply rate.
+- Offer two subject line options: one direct (references the signal), one curiosity-gap (hints at the implication).
+- Write like a human who read one specific article about this company, not like a CRM template.
+- CTAs that ask a yes/no question or request a brief reply outperform meeting links in cold email.
+- When Analyst confidence is HIGH, be specific. When MEDIUM, qualify. When LOW, go general or skip the detail.
+- Include a two-step follow-up sequence: a value-add bump on day 3 and a polite breakup on day 7.
