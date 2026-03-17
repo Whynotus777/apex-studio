@@ -180,6 +180,12 @@ def parse_messages_json(messages_raw):
     return normalized
 
 
+_DONE_ALIASES = {
+    "done", "completed", "scanned", "searched", "found",
+    "success", "ok", "finished", "complete",
+}
+
+
 def normalize_status(status_raw):
     """Extract clean status from various formats."""
     if not status_raw:
@@ -195,10 +201,16 @@ def normalize_status(status_raw):
         reason_match = re.search(r'blocked:(.+?)(?:\||$)', status_str)
         reason = reason_match.group(1).strip() if reason_match else "unknown"
         return {"state": "blocked", "reason": reason}
-    elif status_str == "done" or status_str.startswith("done"):
+    elif (
+        status_str in _DONE_ALIASES
+        or status_str.startswith("done")
+        or status_str.startswith("completed")
+        or status_str.startswith("scanned")
+    ):
         return {"state": "done", "reason": ""}
     else:
-        return {"state": "blocked", "reason": "unknown_format"}
+        # Unknown format — don't call it blocked, just mark unknown
+        return {"state": "unknown", "reason": status_str}
 
 
 def parse_response(text):

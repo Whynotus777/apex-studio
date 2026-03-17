@@ -984,11 +984,41 @@ async def _run_content_engine_chain(
         scout_resp = await loop.run_in_executor(None, kernel.spawn_agent, scout_agent, scout_task_id)
     except Exception as exc:
         print(f"[DEBUG] scout spawn failed: {exc}", flush=True)
-        await _safe_reply(message, f"⚠️ Scout failed: {exc}")
+        await _safe_reply(
+            message,
+            f"⚠️ Scout failed to start.\n"
+            f"Error: {exc}\n\n"
+            f"Use `/workspace {workspace_id}` to check agent status.",
+            parse_mode="Markdown",
+        )
         return
 
+    scout_status = scout_resp.get("status", {})
+    scout_state = scout_status.get("state", "") if isinstance(scout_status, dict) else str(scout_status)
+    scout_evidence = _fetch_task_evidence(scout_task_id)
+    scout_has_evidence = bool(scout_evidence)
+
+    if scout_state == "blocked":
+        if scout_has_evidence:
+            # Evidence found despite blocked status — model mislabeled the status.
+            # The search worked; continue the chain.
+            print(
+                f"[DEBUG] Scout returned blocked but {len(scout_evidence)} evidence row(s) found — treating as success",
+                flush=True,
+            )
+        else:
+            # Genuinely blocked with no evidence — abort with actionable message.
+            await _safe_reply(
+                message,
+                "⚠️ Scout couldn't find enough sources for this topic.\n"
+                "Try a broader topic, different keywords, or check that the Scout agent has web_search access.\n\n"
+                f"Use `/workspace {workspace_id}` to check agent status or `/spawn` to retry manually.",
+                parse_mode="Markdown",
+            )
+            return
+
     scout_action = _infer_scout_action(scout_resp, scout_task_id)
-    print(f"[DEBUG] scout done: status={scout_resp.get('status')} action={scout_action!r}", flush=True)
+    print(f"[DEBUG] scout done: status={scout_state!r} evidence={len(scout_evidence)} action={scout_action!r}", flush=True)
     chain_log.append({"agent": scout_agent, "status": scout_resp.get("status"), "action": scout_action})
     await _safe_reply(message, f"🔍 Scout done — {scout_action}\n✍️ Spawning Writer…")
 
@@ -1028,7 +1058,13 @@ async def _run_content_engine_chain(
         writer_resp = await loop.run_in_executor(None, kernel.spawn_agent, writer_agent, writer_task_id)
     except Exception as exc:
         print(f"[DEBUG] writer spawn failed: {exc}", flush=True)
-        await _safe_reply(message, f"⚠️ Writer failed: {exc}")
+        await _safe_reply(
+            message,
+            f"⚠️ Writer failed to generate a draft.\n"
+            f"Error: {exc}\n\n"
+            f"Scout's research is saved. Use `/spawn {writer_agent}` to retry.",
+            parse_mode="Markdown",
+        )
         return
 
     writer_preview = str(writer_resp.get("proposed_output") or "")
@@ -1038,11 +1074,21 @@ async def _run_content_engine_chain(
     print(f"[DEBUG] writer done: status={writer_state} preview={writer_preview[:60]!r}", flush=True)
     chain_log.append({"agent": writer_agent, "status": writer_resp.get("status"), "action": writer_action})
 
+    if not writer_preview:
+        print("[DEBUG] writer returned empty proposed_output", flush=True)
+        await _safe_reply(
+            message,
+            "⚠️ Writer ran but produced no draft output.\n"
+            "This usually means the model hit its context limit. "
+            "Trying to continue to Critic anyway…",
+        )
+
     # ── Step 2b: Humanize pass ─────────────────────────────────────────────
     # A second Writer task rewrites the draft to strip AI-generated patterns.
     # The humanized output replaces the original draft for Critic review.
-    await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🪄 Humanizing draft…")
+    humanize_succeeded = False
     if writer_preview:
+        await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🪄 Humanizing draft…")
         humanize_desc = (
             f"Workspace: {workspace_id}\n"
             "HUMANIZE PASS: Rewrite the draft below to sound authentically human.\n\n"
@@ -1071,6 +1117,7 @@ async def _run_content_engine_chain(
             if humanized:
                 writer_preview = humanized
                 writer_task_id = humanize_task_id
+                humanize_succeeded = True
                 chain_log.append({
                     "agent": writer_agent,
                     "status": humanize_resp.get("status"),
@@ -1081,22 +1128,30 @@ async def _run_content_engine_chain(
                 print("[DEBUG] humanize returned empty — keeping original draft", flush=True)
         except Exception as exc:
             print(f"[DEBUG] humanize pass failed (non-fatal): {exc}", flush=True)
+    else:
+        await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🔍 Running Critic…")
 
     # Store full draft for "Read Full Draft" button retrieval
     if writer_preview:
         _draft_store[writer_task_id] = writer_preview
 
     # ── Step 3: Critic (+ 1 revision loop if REVISE) ──────────────────────
-    await _safe_reply(message, f"🪄 Humanize done\n🔍 Running Critic…")
+    critic_intro = "🪄 Humanized\n🔍 Running Critic…" if humanize_succeeded else "🔍 Running Critic…"
+    await _safe_reply(message, critic_intro)
     print(f"[DEBUG] critic start: writer_task={writer_task_id}", flush=True)
     try:
         review = await _handle_critic_chain(writer_task_id, workspace_id, message, emit_message=False)
     except Exception as exc:
         print(f"[DEBUG] critic exception: {exc}", flush=True)
-        fallback = _chain_summary(chain_log)
-        if writer_preview:
-            fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
-        await _safe_reply(message, f"⚠️ Critic failed: {exc}\n\n{fallback}")
+        chain_summary = _chain_summary(chain_log)
+        draft_section = f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}" if writer_preview else ""
+        await _safe_reply(
+            message,
+            f"⚠️ Critic pipeline failed: {exc}\n\n"
+            f"{chain_summary}{draft_section}\n\n"
+            f"Chain failed at Critic. Use `/workspace {workspace_id}` to check status.",
+            parse_mode="Markdown",
+        )
         return
     print(f"[DEBUG] critic done: review={'None' if review is None else review.get('verdict')}", flush=True)
 
@@ -1221,12 +1276,19 @@ async def _run_content_engine_chain(
                 fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
             await _safe_reply(message, fallback)
     else:
-        # Critic pipeline returned nothing — send what we have
-        print(f"[DEBUG] critic returned None, sending chain summary", flush=True)
-        fallback = _chain_summary(chain_log)
-        if writer_preview:
-            fallback += f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}"
-        await _safe_reply(message, fallback)
+        # Critic pipeline returned nothing — send draft + chain state so user isn't left hanging
+        print(f"[DEBUG] critic returned None, sending chain summary + draft", flush=True)
+        chain_summary = _chain_summary(chain_log)
+        draft_section = f"\n\n📝 Draft:\n{_summarise(writer_preview, 300)}" if writer_preview else ""
+        no_review_note = (
+            "\n\n⚠️ Critic produced no review (queue may have been empty or review already processed). "
+            f"Use `/approvals` to check the queue or `/workspace {workspace_id}` for status."
+        )
+        await _safe_reply(
+            message,
+            f"{chain_summary}{draft_section}{no_review_note}",
+            parse_mode="Markdown",
+        )
 
 
 async def _run_generic_chain(
