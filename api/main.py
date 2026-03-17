@@ -1761,13 +1761,33 @@ def get_team_progress(team_id: str) -> dict[str, Any]:
         })
 
     activity_rows.sort(key=lambda item: _progress_parse_ts(str(item.get("ts") or "")) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    # Remove generic fallback strings that carry no useful information.
+    # These are produced when _progress_rewrite_message finds no matching pattern.
+    _GENERIC_MESSAGES = {"updated the task", "sent an update"}
+    meaningful = [
+        item for item in activity_rows
+        if not any(item["message"].endswith(g) for g in _GENERIC_MESSAGES)
+    ]
+
+    # Deduplicate consecutive runs: if the same agent emits the same message
+    # multiple times in a row (e.g. 4 "Scout found trending topics"), keep only
+    # the most recent one (list is already sorted newest-first).
+    deduped: list[dict[str, Any]] = []
+    last_key: tuple[str, str] | None = None
+    for item in meaningful:
+        key = (item["agent_icon"], item["message"])
+        if key != last_key:
+            deduped.append(item)
+            last_key = key
+
     recent_activity = [
         {
             "time": _progress_relative_time(str(item.get("ts") or "")),
             "message": item["message"],
             "agent_icon": item["agent_icon"],
         }
-        for item in activity_rows[:10]
+        for item in deduped[:10]
     ]
 
     pending_review_count = sum(
