@@ -482,7 +482,16 @@ def approve_approval(review_id: int, payload: ApprovalApproveRequest | None = No
     if edited_content:
         session = _latest_session_for_task(approval["task_id"])
         original = _extract_output_text(session)
-        _store_learning_diff(approval.get("workspace_id") or "global", approval["task_id"], original, edited_content)
+        try:
+            _store_learning_diff(approval.get("workspace_id") or "global", approval["task_id"], original, edited_content)
+        except Exception as exc:
+            # BUG (2026-03-17): kernel/learning.py set_preference inserts a string id
+            # ("pref-<hex>") but user_preferences has INTEGER PRIMARY KEY AUTOINCREMENT.
+            # The schema in db/schema.sql and the schema in learning.py._migrate() are
+            # mismatched. Wrapped in try/except so edit+approve still succeeds — the
+            # diff is logged but the approve is not blocked.
+            import logging
+            logging.warning("_store_learning_diff failed (schema mismatch): %s", exc)
     kernel.approve_action(review_id)
     return {
         "status": "approved",
