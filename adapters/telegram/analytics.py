@@ -214,6 +214,50 @@ def generate_weekly_digest(workspace_id: str, db_path: str | Path | None = None)
 
 
 
+def get_recent_published_posts(
+    workspace_id: str,
+    limit: int = 5,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Return the most recent published posts for a workspace.
+
+    Each entry contains task_id, platform, recorded_at, and whatever
+    engagement metrics were stored (likes, comments, reposts, impressions,
+    post_url, engagement_score, post_content).
+    """
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT task_id, platform, metrics_json, recorded_at
+            FROM performance_records
+            WHERE workspace_id = ?
+            ORDER BY recorded_at DESC, rowid DESC
+            LIMIT ?
+            """,
+            (workspace_id, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    posts = []
+    for row in rows:
+        metrics = json.loads(row["metrics_json"]) if row["metrics_json"] else {}
+        posts.append({
+            "task_id": str(row["task_id"]),
+            "platform": str(row["platform"]),
+            "recorded_at": str(row["recorded_at"]),
+            "post_url": metrics.get("post_url", ""),
+            "post_content": metrics.get("post_content", ""),
+            "likes": int(metrics.get("likes", 0) or 0),
+            "comments": int(metrics.get("comments", 0) or 0),
+            "reposts": int(metrics.get("reposts", 0) or 0),
+            "impressions": int(metrics.get("impressions", 0) or 0),
+            "engagement_score": metrics.get("engagement_score", None),
+        })
+    return posts
+
+
 def format_digest_for_telegram(digest: dict[str, Any]) -> str:
     lines = [
         "📈 Weekly Content Digest",

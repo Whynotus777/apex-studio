@@ -35,6 +35,11 @@ from adapters.telegram.preferences import (  # noqa: E402
     PLATFORM_INSTRUCTIONS,
     VALID_PLATFORMS,
 )
+from adapters.telegram.analytics import (  # noqa: E402
+    generate_weekly_digest,
+    format_digest_for_telegram,
+    get_recent_published_posts,
+)
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -2129,6 +2134,100 @@ async def handle_callback(update: Update, context: Any) -> None:
         await query.message.reply_text(f"⏸️ Paused agent: {value}")
 
 
+async def digest_command(update: Update, context: Any) -> None:
+    """
+    /digest <workspace_id>
+
+    Generate and send the weekly content digest for a workspace:
+    total posts, average engagement, best post, and per-platform breakdowns.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /digest <workspace_id>")
+        return
+
+    workspace_id = args[0]
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    try:
+        digest = generate_weekly_digest(workspace_id)
+    except Exception as exc:
+        await update.message.reply_text(f"Failed to generate digest: {exc}")
+        return
+
+    if digest.get("total_posts", 0) == 0 and digest.get("records_considered", 0) == 0:
+        await update.message.reply_text("No posts published yet this week.")
+        return
+
+    await update.message.reply_text(format_digest_for_telegram(digest))
+
+
+async def published_command(update: Update, context: Any) -> None:
+    """
+    /published <workspace_id>
+
+    Show the last 5 published posts for a workspace with their engagement
+    metrics (likes, comments, reposts, impressions) if recorded.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /published <workspace_id>")
+        return
+
+    workspace_id = args[0]
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    try:
+        posts = get_recent_published_posts(workspace_id, limit=5)
+    except Exception as exc:
+        await update.message.reply_text(f"Failed to load published posts: {exc}")
+        return
+
+    if not posts:
+        await update.message.reply_text("No posts published yet this week.")
+        return
+
+    lines = [f"📰 *Last {len(posts)} published posts* — `{workspace_id}`", ""]
+    for i, post in enumerate(posts, 1):
+        platform = post["platform"] or "unknown"
+        recorded_at = post["recorded_at"][:10] if post["recorded_at"] else "unknown date"
+        task_id = post["task_id"]
+
+        lines.append(f"*{i}. {platform}* — {recorded_at}")
+        lines.append(f"   Task: `{task_id}`")
+
+        has_engagement = any(post[k] > 0 for k in ("likes", "comments", "reposts", "impressions"))
+        if has_engagement:
+            lines.append(
+                f"   ❤️ {post['likes']}  💬 {post['comments']}  🔁 {post['reposts']}  👁 {post['impressions']}"
+            )
+        else:
+            lines.append("   _(no engagement data recorded)_")
+
+        if post.get("post_url"):
+            lines.append(f"   🔗 {post['post_url']}")
+
+        lines.append("")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 def send_to_abdul(text: str, buttons: list[list[dict[str, str]]] | None = None) -> None:
     """Outbound: Agent -> Abdul."""
     import requests
@@ -2168,6 +2267,8 @@ def main() -> None:
     app.add_handler(CommandHandler("platform", platform_command))
     app.add_handler(CommandHandler("xcreds", xcreds_command))
     app.add_handler(CommandHandler("connect", connect_command))
+    app.add_handler(CommandHandler("digest", digest_command))
+    app.add_handler(CommandHandler("published", published_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

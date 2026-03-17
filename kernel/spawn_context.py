@@ -29,7 +29,7 @@ sys.path.insert(0, APEX_HOME)
 
 
 def _strip_site_operators(query: str) -> str:
-    """Remove site: tokens from a search query.
+    """Remove site: tokens (and any flanking OR/AND) from a search query.
 
     DuckDuckGo's HTML endpoint ignores or mishandles site: operators,
     causing zero results. Strip them and collapse extra whitespace.
@@ -37,12 +37,17 @@ def _strip_site_operators(query: str) -> str:
              → 'AI agents 2026'
     """
     import re
-    # Remove 'site:...' tokens (including any trailing OR/AND conjunctions)
-    cleaned = re.sub(r'\bsite:\S+', '', query, flags=re.IGNORECASE)
-    # Remove orphaned boolean operators left after stripping site: tokens
-    cleaned = re.sub(r'\b(OR|AND)\s*(OR|AND\b|$)', '', cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r'^\s*(OR|AND)\s*', '', cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s*(OR|AND)\s*$', '', cleaned, flags=re.IGNORECASE)
+    # Remove each site: token together with any immediately preceding or
+    # following OR/AND conjunction so multi-site chains collapse cleanly.
+    cleaned = re.sub(
+        r'(\s*\b(?:OR|AND)\b\s*)?site:\S+(\s*\b(?:OR|AND)\b\s*)?',
+        ' ',
+        query,
+        flags=re.IGNORECASE,
+    )
+    # Remove any orphaned leading/trailing OR/AND left over.
+    cleaned = re.sub(r'^\s*\b(?:OR|AND)\b\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*\b(?:OR|AND)\b\s*$', '', cleaned, flags=re.IGNORECASE)
     return ' '.join(cleaned.split())
 
 
