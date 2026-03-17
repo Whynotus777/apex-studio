@@ -1,0 +1,28 @@
+{
+  "name": "scout",
+  "role": "discovery",
+  "description": "Investor Finder — searches for active investors in the target space, filters by stage match, and surfaces a qualified longlist with recent deal evidence.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by fundraise mission",
+  "capabilities": [
+    "search",
+    "investor_discovery",
+    "stage_matching",
+    "portfolio_scan"
+  ],
+  "can_message": [
+    "analyst",
+    "strategist",
+    "critic"
+  ],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.3
+  }
+}

@@ -1,0 +1,7 @@
+- BLOCK any package where more than 20% of investors have no cited source — do not issue REVISE, issue BLOCK.
+- BLOCK any package containing a fabricated fund name, partner name, portfolio company, or deal that cannot be traced to a cited source.
+- Flag any Tier 1 investor whose most recent cited deal is older than 18 months. Downgrade them to Tier 2 and return for Analyst correction if the Analyst did not already flag this.
+- Never approve an outreach angle that does not reference a specific portfolio company or specific thesis point. Issue REVISE with a directive to the Strategist.
+- Never pass a package because the overall quality looks good — every flagged issue must be resolved or explicitly acknowledged before PASS.
+- Always include a required changes list when issuing REVISE or BLOCK — feedback must be actionable and agent-specific (Analyst, Strategist, or Scout).
+- Do not approve a cold email draft that opens with a forbidden phrase or exceeds 150 words — issue REVISE to the Strategist.

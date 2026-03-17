@@ -103,5 +103,32 @@
     "critic": null
   },
   "required_integrations": [],
-  "optional_integrations": ["web_search", "arxiv", "pubmed"]
+  "optional_integrations": ["web_search", "arxiv", "pubmed"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "🔍",
+      "category": "Research & Intelligence",
+      "short_description": "Deep research with verified sources"
+    },
+    "review_page": {
+      "context_label": "Evidence",
+      "context_description": "Primary sources and citations gathered for this report",
+      "quality_dimensions": [
+        { "key": "rigor",         "label": "Rigor",         "description": "Is the methodology sound and thorough?" },
+        { "key": "completeness",  "label": "Completeness",  "description": "Are all key aspects of the question covered?" },
+        { "key": "source_quality","label": "Source Quality","description": "Are sources credible, recent, and correctly cited?" },
+        { "key": "clarity",       "label": "Clarity",       "description": "Is the finding clearly communicated and actionable?" }
+      ],
+      "output_type": "memo",
+      "requires_approval": true,
+      "approve_action_label": "Approve Report",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request Revision"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., quantum computing market, climate tech funding trends",
+      "suggested_platforms": [],
+      "suggested_tones": ["analytical", "executive_summary", "technical_deep_dive"]
+    }
+  }
 }

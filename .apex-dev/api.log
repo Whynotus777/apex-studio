@@ -1,0 +1,18 @@
+INFO:     Started server process [86500]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:58084 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58105 - "OPTIONS /api/tasks/task-demo-mkt-002/output HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58107 - "OPTIONS /api/tasks/task-demo-mkt-002/evidence HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58110 - "OPTIONS /api/tasks/task-demo-mkt-002/reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58111 - "OPTIONS /api/tasks/task-demo-mkt-002/chain HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58113 - "OPTIONS /api/approvals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58110 - "GET /api/tasks/task-demo-mkt-002/evidence HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58111 - "GET /api/tasks/task-demo-mkt-002/reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58105 - "GET /api/tasks/task-demo-mkt-002/output HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58107 - "GET /api/tasks/task-demo-mkt-002/chain HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58113 - "GET /api/approvals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58115 - "GET /api/templates HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58117 - "GET /api/templates/investor-research HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58119 - "GET /api/teams/ws-demo-marketing/ui-schema HTTP/1.1" 200 OK

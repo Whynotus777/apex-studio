@@ -132,5 +132,32 @@
     }
   },
   "required_integrations": [],
-  "optional_integrations": ["web_search", "twitter", "linkedin"]
+  "optional_integrations": ["web_search", "twitter", "linkedin"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "📝",
+      "category": "Content & Marketing",
+      "short_description": "Creates and publishes content matched to your voice"
+    },
+    "review_page": {
+      "context_label": "Sources",
+      "context_description": "Research used to inform this draft",
+      "quality_dimensions": [
+        { "key": "accuracy",     "label": "Accuracy",     "description": "Are facts and claims correct?" },
+        { "key": "grounding",    "label": "Grounding",    "description": "Are claims backed by cited sources?" },
+        { "key": "authenticity", "label": "Authenticity", "description": "Does it sound like the user's voice?" },
+        { "key": "completeness", "label": "Completeness", "description": "Does it fully address the mission?" }
+      ],
+      "output_type": "social_post",
+      "requires_approval": true,
+      "approve_action_label": "Approve & Publish",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request Revision"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., AI agents, robotics, technology trends",
+      "suggested_platforms": ["linkedin", "x", "tiktok", "instagram"],
+      "suggested_tones": ["professional_authority", "bold_opinionated", "casual_conversational", "educational_clear"]
+    }
+  }
 }

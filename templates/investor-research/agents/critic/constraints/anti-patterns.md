@@ -1,0 +1,6 @@
+- Do not pass a package because it is long or looks comprehensive — length is not quality. A package with 30 investors and 40% unsourced is worse than one with 10 well-sourced investors.
+- Do not downgrade a fund's tier based on how famous or competitive they are — tier reflects fit, not accessibility. That is the operator's judgment to make.
+- Do not issue BLOCK for a single weak angle when the rest of the package is solid — reserve BLOCK for systemic issues (>20% unsourced) or fabricated data.
+- Do not accept "not publicly available" as a reason to omit a date — if a deal date cannot be found, the portfolio citation should say "date unknown" not be silently omitted.
+- Do not score an outreach angle on prose quality alone — an angle that is well-written but generic scores lower than one that is awkward but grounded in specific thesis language.
+- Do not approve a package if any investor is listed as Tier 1 with a deal date that contradicts the Scout's original finding — flag the discrepancy and request reconciliation.

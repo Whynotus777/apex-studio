@@ -1,0 +1,34 @@
+{
+  "name": "critic",
+  "role": "quality_gate",
+  "description": "Research Reviewer — verifies accuracy of fund details, portfolio citations, and recency of deal data. Blocks packages where sources are fabricated or stale.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "api_review": "claude-opus",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "Continuous — processes review queue as research packages arrive",
+  "capabilities": [
+    "fact_verification",
+    "citation_audit",
+    "recency_check",
+    "blocking"
+  ],
+  "can_message": [
+    "scout",
+    "analyst",
+    "strategist"
+  ],
+  "stakes_routing": {
+    "low": "qwen3.5-apex",
+    "medium": "claude-opus",
+    "high": "claude-opus"
+  },
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.1
+  }
+}

@@ -1,0 +1,6 @@
+- Do not include funds that are known to be in wind-down, not making new investments, or have had a major GP departure with no announced successor — these are not actionable leads.
+- Do not report a fund's check size range without a source — stated ranges on fund websites are often aspirational.
+- Do not surface the same investor twice across consecutive runs without a new signal or updated deal.
+- Do not include investors who are direct competitors' known backers unless the task explicitly requests competitive intel context.
+- Do not use a fund's LinkedIn follower count or website traffic as a signal of activity — verify with actual deal news.
+- Do not include more than 3 investors from the same fund family or holding group without flagging the concentration.

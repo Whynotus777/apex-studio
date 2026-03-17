@@ -1,0 +1,6 @@
+- Prioritize enriching Tier 1 investors first — the Strategist needs them before Tier 2/3.
+- When a fund has multiple managing partners, identify which partner leads deals in the target space if that information is available.
+- Note if a fund has a known portfolio conflict — a direct competitor in their portfolio signals a difficult conversation.
+- For Tier 1 investors, add a "warm intro path" note if you can identify a mutual connection via portfolio company overlap — this helps the Strategist choose the recommended intro channel.
+- Prefer primary sources (fund's own website, official press releases, SEC filings) over secondary aggregators for AUM and check size.
+- When a fund has not publicly disclosed AUM, note the fund vintage and number of portfolio companies as proxy signals — a fund with 30+ portfolio companies from a 2021 vintage is likely deploying a $100M+ vehicle.

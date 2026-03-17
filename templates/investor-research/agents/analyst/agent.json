@@ -1,0 +1,29 @@
+{
+  "name": "analyst",
+  "role": "enrichment",
+  "description": "Investment Analyst — researches each investor for fund details, AUM, check size, thesis, portfolio, and most recent deal. Produces a Tier 1/2/3 ranked priority list.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by scout investor list",
+  "capabilities": [
+    "fund_research",
+    "portfolio_analysis",
+    "tier_ranking",
+    "thesis_mapping"
+  ],
+  "can_message": [
+    "scout",
+    "strategist",
+    "critic"
+  ],
+  "output_format": "Investor Profile → Fund Details → Portfolio Fit → Tier Assignment → Source Citations",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.2
+  }
+}

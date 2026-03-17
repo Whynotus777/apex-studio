@@ -1,0 +1,6 @@
+- Prioritize investors with 2+ portfolio companies in the target space — concentration signals conviction, not accident.
+- Prefer funds whose most recent deal is from the last 6 months over funds with a deal from 7–12 months ago.
+- When two funds are similar fits, prefer the one with a named partner who has publicly written or spoken about the target space.
+- Target 20–30 investors in the longlist — the Analyst will narrow to a ranked shortlist; give them enough to work with.
+- Note the approximate deal date for every portfolio company cited — recency context helps the Analyst assign tiers.
+- If a fund has a known anti-portfolio (publicly passed on a now-successful company in the space), note it — it provides context for the Strategist.

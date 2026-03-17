@@ -1,0 +1,161 @@
+{
+  "name": "Investor Research Engine",
+  "description": "A four-agent pipeline that discovers investors in your target space, enriches each with fund details and deal history, ranks them by fit, and crafts personalized Tier 1 outreach angles.",
+  "category": "finance",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Investor Finder — searches for active investors in the target space, filters by stage match, and surfaces a qualified longlist with recent deal evidence.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by fundraise mission",
+      "capabilities": ["search", "investor_discovery", "stage_matching", "portfolio_scan"],
+      "can_message": ["analyst", "strategist", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "analyst",
+      "role": "enrichment",
+      "description": "Investment Analyst — researches each investor for fund details, AUM, check size, thesis, portfolio, and most recent deal. Produces a Tier 1/2/3 ranked priority list.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by scout investor list",
+      "capabilities": ["fund_research", "portfolio_analysis", "tier_ranking", "thesis_mapping"],
+      "can_message": ["scout", "strategist", "critic"],
+      "output_format": "Investor Profile → Fund Details → Portfolio Fit → Tier Assignment → Source Citations",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    },
+    {
+      "name": "strategist",
+      "role": "outreach",
+      "description": "Outreach Strategist — for each Tier 1 investor, identifies the specific thesis connection, closest portfolio comp, and drafts a personalized cold email under 150 words.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by analyst tier rankings",
+      "capabilities": ["thesis_matching", "portfolio_comp_analysis", "cold_email", "intro_routing"],
+      "can_message": ["scout", "analyst", "critic"],
+      "output_format": "Thesis Connection → Closest Portfolio Comp → Intro Channel → Draft Cold Email",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.4
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Research Reviewer — verifies accuracy of fund details, portfolio citations, and recency of deal data. Blocks packages where sources are fabricated or stale.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "api_review": "claude-opus",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as research packages arrive",
+      "capabilities": ["fact_verification", "citation_audit", "recency_check", "blocking"],
+      "can_message": ["scout", "analyst", "strategist"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    }
+  ],
+  "pipeline": ["discover", "enrich", "strategize", "review"],
+  "default_tool_grants": {
+    "scout": ["web_search"],
+    "analyst": ["web_search"]
+  },
+  "default_permissions": {
+    "autonomy": {
+      "investor_discovery": "draft",
+      "fund_enrichment": "draft",
+      "outreach_sending": "approval_required",
+      "high_stakes_actions": "human_approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "user_channel": "read_only"
+    },
+    "data_access": {
+      "working_memory": "full_write",
+      "external_search": "approval_required",
+      "crm_write": "approval_required"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 100.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    },
+    "tool_cost": {
+      "limit": 5.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "heartbeats": {
+    "scout": null,
+    "analyst": null,
+    "strategist": null,
+    "critic": null
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search", "crm", "gmail"],
+  "integrations": ["web_search"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "💰",
+      "category": "Finance & Analysis",
+      "short_description": "Finds, evaluates, and prioritizes investors for your fundraise"
+    },
+    "review_page": {
+      "context_label": "Investor Research",
+      "context_description": "Due diligence and background on each investor",
+      "quality_dimensions": [
+        { "key": "accuracy",    "label": "Accuracy",    "description": "Are fund details, names, and deal history correct?" },
+        { "key": "relevance",   "label": "Relevance",   "description": "Does this investor actually fund this space?" },
+        { "key": "thesis_fit",  "label": "Thesis Fit",  "description": "Specific connection to the company, not generic AI" },
+        { "key": "recency",     "label": "Recency",     "description": "Is the data current? Recent deals cited?" }
+      ],
+      "output_type": "report",
+      "requires_approval": true,
+      "approve_action_label": "Approve & Save to Pipeline",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request More Research"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., AI infrastructure, developer tools, vertical SaaS",
+      "config_fields": ["target_stage", "check_size_range", "geography"]
+    }
+  }
+}

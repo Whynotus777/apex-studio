@@ -2,7 +2,7 @@
 """
 scripts/seed_demo.py — Deterministic demo data for APEX web app development.
 
-Seeds two teams with realistic content, evidence, critic reviews, and chain
+Seeds multiple teams with realistic content, evidence, critic reviews, and chain
 events so every web app screen renders real-looking data without running the
 full agent pipeline.
 
@@ -527,6 +527,8 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
          "Automate research, drafting, and publishing of thought leadership content."),
         ("goal-demo-sales",     "Sales Outreach Automation",
          "Automate prospect research, enrichment, and personalised outreach drafts."),
+        ("goal-demo-investor",  "Investor Intelligence Briefing",
+         "Build an investor target list, enrich each fund, and draft outreach for the highest-fit firms."),
     ]
     for gid, name, desc in goals:
         conn.execute(
@@ -538,6 +540,7 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
     workspaces = [
         ("ws-demo-marketing", "content-engine",   "My Marketing Team"),
         ("ws-demo-sales",     "sales-outreach",   "My Sales Team"),
+        ("ws-demo-investor",  "investor-research", "My Investor Team"),
     ]
     for wid, tid, name in workspaces:
         conn.execute(
@@ -583,6 +586,19 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         ("ws-demo-sales-critic",        "ws-demo-sales",     "idle",   None,
          _meta("ws-demo-sales", "sales-outreach", "critic",
                "content-engine/agents/critic/agent.json")),
+        # Investor team — strategist is actively turning research into outreach
+        ("ws-demo-investor-scout",      "ws-demo-investor",  "idle",   None,
+         _meta("ws-demo-investor", "investor-research", "scout",
+               "investor-research/agents/scout/agent.json")),
+        ("ws-demo-investor-analyst",    "ws-demo-investor",  "idle",   None,
+         _meta("ws-demo-investor", "investor-research", "analyst",
+               "investor-research/agents/analyst/agent.json")),
+        ("ws-demo-investor-strategist", "ws-demo-investor",  "active", "task-demo-investor-001",
+         _meta("ws-demo-investor", "investor-research", "strategist",
+               "investor-research/agents/strategist/agent.json")),
+        ("ws-demo-investor-critic",     "ws-demo-investor",  "idle",   None,
+         _meta("ws-demo-investor", "investor-research", "critic",
+               "investor-research/agents/critic/agent.json")),
     ]
     for agent_name, ws_id, status, current_task, meta in agents:
         conn.execute(
@@ -643,6 +659,16 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
          "ws-demo-sales-writer", None,
          "datetime('now', '-3 days -45 minutes')",
          None),
+
+        # Investor — analyst briefing in progress, scaffold for finance/research UI
+        ("task-demo-investor-001", "ws-demo-investor", "goal-demo-investor",
+         "Tier 1 AI infrastructure investor target package",
+         "Find active investors in AI infrastructure, enrich each fund with thesis and portfolio fit, "
+         "then draft a personalized outreach angle for the top matches.",
+         "in_progress", None,
+         "ws-demo-investor-strategist", "ws-demo-investor-strategist",
+         "datetime('now', '-4 hours -10 minutes')",
+         None),
     ]
     for (tid, ws, goal, title, desc, status, rev_status,
          assigned_to, checked_out_by, created_at, completed_at) in tasks:
@@ -666,8 +692,108 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         )
         counts["evidence"] += 1
 
+    investor_evidence = [
+        (
+            "ev-demo-investor-a",
+            "task-demo-investor-001",
+            "ws-demo-investor-scout",
+            "AI infrastructure investors March 2026 enterprise agent infrastructure seed series A",
+            json.dumps([
+                {
+                    "title": "Felicis backs agent infrastructure startup TraceLayer",
+                    "url": "https://techcrunch.com/2026/03/tracelayer-series-a",
+                    "snippet": "TraceLayer's Series A was led by Felicis, highlighting continued investor appetite for infrastructure that manages production AI systems.",
+                    "source": "techcrunch.com",
+                },
+                {
+                    "title": "Index Ventures bets on enterprise orchestration for AI agents",
+                    "url": "https://sifted.eu/articles/index-ventures-ai-agent-orchestration-2026",
+                    "snippet": "Index is increasing conviction around control-plane and observability layers for enterprise agent deployments.",
+                    "source": "sifted.eu",
+                },
+                {
+                    "title": "Theory Ventures on why AI infra still has room for new winners",
+                    "url": "https://theory.ventures/blog/ai-infrastructure-2026",
+                    "snippet": "Theory Ventures outlines what it looks for in vertical infrastructure products serving the next wave of AI-native software.",
+                    "source": "theory.ventures",
+                },
+            ]),
+        ),
+    ]
+    for evidence_id, task_id, agent_id, query, results_json in investor_evidence:
+        conn.execute(
+            """INSERT OR REPLACE INTO evidence
+               (id, task_id, agent_id, tool_name, query, results)
+               VALUES (?, ?, ?, 'web_search', ?, ?)""",
+            (evidence_id, task_id, agent_id, query, results_json),
+        )
+        counts["evidence"] += 1
+
     # ── 6. Agent sessions (drafts) ────────────────────────────────────────────
     for s in _SESSIONS:
+        conn.execute(
+            f"""INSERT OR REPLACE INTO agent_sessions
+               (id, agent_name, task_id, context, created_at, last_active, status)
+               VALUES (?,?,?,?,{s['created_at']},{s['last_active']},?)""",
+            (s["id"], s["agent_name"], s["task_id"], s["context"], s["status"]),
+        )
+        counts["sessions"] += 1
+
+    investor_sessions = [
+        {
+            "id": "sess-demo-investor-scout",
+            "agent_name": "ws-demo-investor-scout",
+            "task_id": "task-demo-investor-001",
+            "context": json.dumps({
+                "actions_taken": "Built an initial list of active investors backing AI infrastructure and enterprise agent tooling.",
+                "observations": "The strongest recent activity is concentrated among firms already backing observability, infra control planes, and workflow software.",
+                "proposed_output": "Scout longlist complete. Passing candidate investors with recent deal evidence to Analyst.",
+                "messages": [{"to": "ws-demo-investor-analyst", "type": "request", "content": "Enrich these investors with fund details, thesis, and portfolio fit."}],
+                "scratchpad_update": "Prioritize investors already active in developer tooling, observability, and enterprise AI infrastructure.",
+                "status": {"state": "done", "stakes": "medium"},
+            }),
+            "status": "complete",
+            "created_at": "datetime('now', '-4 hours -12 minutes')",
+            "last_active": "datetime('now', '-4 hours -11 minutes')",
+        },
+        {
+            "id": "sess-demo-investor-analyst",
+            "agent_name": "ws-demo-investor-analyst",
+            "task_id": "task-demo-investor-001",
+            "context": json.dumps({
+                "actions_taken": "Researched fund size, stage fit, thesis alignment, and closest portfolio comps for the highest-signal investors from Scout.",
+                "observations": "Felicis, Index, and Theory Ventures all show credible fit for an AI infrastructure raise, but with different positioning angles.",
+                "proposed_output": (
+                    "Tier 1 shortlist: Felicis for workflow software appetite, Index for enterprise orchestration angle, Theory for infra conviction and founder resonance."
+                ),
+                "messages": [{"to": "ws-demo-investor-strategist", "type": "handoff", "content": "Top investor shortlist ready. Draft personalized outreach angles and cold emails."}],
+                "scratchpad_update": "Portfolio comp angle is strongest for Index; infra wedge is strongest for Theory.",
+                "status": {"state": "done", "stakes": "medium"},
+            }),
+            "status": "complete",
+            "created_at": "datetime('now', '-4 hours -5 minutes')",
+            "last_active": "datetime('now', '-3 hours -58 minutes')",
+        },
+        {
+            "id": "sess-demo-investor-strategist",
+            "agent_name": "ws-demo-investor-strategist",
+            "task_id": "task-demo-investor-001",
+            "context": json.dumps({
+                "actions_taken": "Drafting tailored outreach angles for the Tier 1 investor shortlist.",
+                "observations": "Best openings connect current investor thesis to production trust infrastructure rather than generic AI tooling.",
+                "proposed_output": (
+                    "Draft outreach package: one tailored cold email per Tier 1 investor, each tied to a recent deal, portfolio comp, and the company's trust-infrastructure wedge."
+                ),
+                "messages": [],
+                "scratchpad_update": "Keep cold emails under 150 words and thesis-linked.",
+                "status": {"state": "active", "stakes": "medium"},
+            }),
+            "status": "active",
+            "created_at": "datetime('now', '-3 hours -50 minutes')",
+            "last_active": "datetime('now', '-3 hours -42 minutes')",
+        },
+    ]
+    for s in investor_sessions:
         conn.execute(
             f"""INSERT OR REPLACE INTO agent_sessions
                (id, agent_name, task_id, context, created_at, last_active, status)
@@ -798,6 +924,39 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
                 )
                 counts["evals"] += 1
 
+    investor_messages = [
+        (
+            "ws-demo-investor-scout",
+            "ws-demo-investor-analyst",
+            "research_handoff",
+            "task-demo-investor-001",
+            "ws-demo-investor",
+            "Initial investor longlist is ready. Focus enrichment on firms with recent AI infra or observability deals.",
+            "-4 hours -8 minutes",
+        ),
+        (
+            "ws-demo-investor-analyst",
+            "ws-demo-investor-strategist",
+            "research_handoff",
+            "task-demo-investor-001",
+            "ws-demo-investor",
+            "Tier 1 shortlist is ready. Draft investor-specific outreach angles and cold emails next.",
+            "-3 hours -54 minutes",
+        ),
+    ]
+    for (from_a, to_a, msg_type, task_id, ws_id, content, offset) in investor_messages:
+        if not _row_exists(conn, "agent_messages",
+                           "task_id=? AND from_agent=? AND to_agent=? AND msg_type=?",
+                           (task_id, from_a, to_a, msg_type)):
+            conn.execute(
+                f"""INSERT INTO agent_messages
+                   (from_agent, to_agent, msg_type, content, task_id, workspace_id,
+                    status, created_at)
+                   VALUES (?,?,?,?,?,?,'read',datetime('now', ?))""",
+                (from_a, to_a, msg_type, content, task_id, ws_id, offset),
+            )
+            counts["messages"] += 1
+
     # ── 9. Agent messages (chain / activity feed) ─────────────────────────────
     for (from_a, to_a, msg_type, task_id, ws_id, content, offset) in _MESSAGES:
         if not _row_exists(conn, "agent_messages",
@@ -844,6 +1003,14 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         ("ws-demo-sales", "preferred_source",   "techcrunch.com", "techcrunch.com"),
         ("ws-demo-sales", "preferred_source",   "bain.com",       "bain.com"),
         ("ws-demo-sales", "preferred_source",   "linkedin.com",   "linkedin.com"),
+        # Investor team
+        ("ws-demo-investor", "topic_preference", "topics",
+         "AI infrastructure, enterprise software, data infrastructure, vertical SaaS"),
+        ("ws-demo-investor", "platform",         "target", "briefing"),
+        ("ws-demo-investor", "preferred_source", "pitchbook.com", "pitchbook.com"),
+        ("ws-demo-investor", "preferred_source", "techcrunch.com", "techcrunch.com"),
+        ("ws-demo-investor", "preferred_source", "nvidia.com", "nvidia.com"),
+        ("ws-demo-investor", "preferred_source", "arxiv.org", "arxiv.org"),
     ]
     for ws_id, pref_type, key, value in prefs:
         conn.execute(

@@ -135,5 +135,32 @@
   },
   "required_integrations": [],
   "optional_integrations": ["web_search", "crm", "gmail", "linkedin"],
-  "integrations": ["web_search"]
+  "integrations": ["web_search"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "💼",
+      "category": "Sales & Outreach",
+      "short_description": "Finds prospects and drafts personalized outreach"
+    },
+    "review_page": {
+      "context_label": "Target Research",
+      "context_description": "Company signals and enrichment data used to personalise this outreach",
+      "quality_dimensions": [
+        { "key": "personalization",   "label": "Personalization",   "description": "Does the email reference specific, accurate details about the prospect?" },
+        { "key": "tone",              "label": "Tone",              "description": "Is the tone appropriate for cold outreach to this prospect?" },
+        { "key": "value_prop_clarity","label": "Value Prop Clarity","description": "Is the value proposition clear and compelling?" },
+        { "key": "accuracy",          "label": "Accuracy",          "description": "Are all claims about the prospect grounded in research?" }
+      ],
+      "output_type": "email",
+      "requires_approval": true,
+      "approve_action_label": "Approve & Send",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request Revision"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., B2B SaaS, fintech Series A companies, e-commerce brands",
+      "suggested_platforms": [],
+      "suggested_tones": ["professional", "warm", "direct"]
+    }
+  }
 }

@@ -29,10 +29,13 @@ except ImportError:
 BASE = "http://localhost:8000"
 DEMO_MKT_WS  = "ws-demo-marketing"
 DEMO_SALES_WS = "ws-demo-sales"
+DEMO_INVESTOR_WS = "ws-demo-investor"
 DEMO_TASK_ID = "task-demo-mkt-002"
+DEMO_INVESTOR_TASK_ID = "task-demo-investor-001"
 
 PASS = 0
 FAIL = 0
+TODO = 0
 results: list[tuple[str, str, str]] = []   # (name, status, detail)
 
 
@@ -48,6 +51,13 @@ def fail(name: str, detail: str) -> None:
     FAIL += 1
     results.append((name, "FAIL", detail))
     print(f"  ❌  {name}: {detail}")
+
+
+def todo(name: str, detail: str) -> None:
+    global TODO
+    TODO += 1
+    results.append((name, "TODO", detail))
+    print(f"  ⏳  {name}: {detail}")
 
 
 def assert_fields(obj: dict, required: list[str], test_name: str) -> bool:
@@ -133,6 +143,16 @@ def test_get_teams() -> None:
     else:
         fail("TeamSummary.pending_approvals int", f"got {type(demo['pending_approvals'])}")
 
+    investor = next((t for t in teams if t.get("id") == DEMO_INVESTOR_WS), None)
+    if investor:
+        ok("Demo investor team present")
+        if investor.get("template_id") == "competitive-intel":
+            ok("Investor team template_id is competitive-intel")
+        else:
+            fail("Investor team template_id", f"got {investor.get('template_id')!r}")
+    else:
+        fail("Demo investor team present", f"{DEMO_INVESTOR_WS} not in {[t.get('id') for t in teams[:10]]}")
+
 
 def test_get_team_detail() -> None:
     print("\n── GET /api/teams/{id} ───────────────────────────────────")
@@ -177,6 +197,26 @@ def test_get_team_members() -> None:
         fail("Members list has 4 items", f"got {len(members) if isinstance(members, list) else members!r}")
 
 
+def test_get_investor_team_members() -> None:
+    print("\n── GET /api/teams/{id}/members (investor) ────────────────")
+    r = get(f"/api/teams/{DEMO_INVESTOR_WS}/members")
+    if r.status_code != 200:
+        fail("GET /members for investor team 200", f"got {r.status_code}")
+        return
+    ok("GET /members for investor team returns 200")
+
+    members: list = r.json()
+    if isinstance(members, list) and len(members) == 3:
+        ok("Investor team has 3 members")
+        roles = {m.get("role") for m in members}
+        if roles == {"discovery", "intelligence", "quality_gate"}:
+            ok("Investor team role mix matches competitive-intel template")
+        else:
+            fail("Investor team role mix", f"got {sorted(roles)!r}")
+    else:
+        fail("Investor team has 3 members", f"got {len(members) if isinstance(members, list) else members!r}")
+
+
 def test_get_team_tasks() -> None:
     print("\n── GET /api/teams/{id}/tasks ─────────────────────────────")
     r = get(f"/api/teams/{DEMO_MKT_WS}/tasks")
@@ -205,6 +245,38 @@ def test_get_team_tasks() -> None:
             fail("TeamTask.events is list", f"got {type(t.get('events'))}")
     else:
         fail("Task with critic_passed exists", f"statuses: {[t.get('review_status') for t in tasks]}")
+
+
+def test_get_investor_team_tasks() -> None:
+    print("\n── GET /api/teams/{id}/tasks (investor) ──────────────────")
+    r = get(f"/api/teams/{DEMO_INVESTOR_WS}/tasks")
+    if r.status_code != 200:
+        fail("GET /tasks for investor team 200", f"got {r.status_code}")
+        return
+    ok("GET /tasks for investor team returns 200")
+
+    tasks: list = r.json()
+    if not isinstance(tasks, list):
+        fail("GET /tasks for investor team returns list", f"got {type(tasks)}")
+        return
+    ok(f"Investor team task list returns list ({len(tasks)} tasks)")
+
+    investor_task = next((t for t in tasks if t.get("id") == DEMO_INVESTOR_TASK_ID), None)
+    if not investor_task:
+        fail("Investor briefing task present", f"{DEMO_INVESTOR_TASK_ID!r} not found")
+        return
+    ok("Investor briefing task present")
+
+    if investor_task.get("status") == "in_progress":
+        ok("Investor briefing task is in_progress")
+    else:
+        fail("Investor briefing task status", f"got {investor_task.get('status')!r}")
+
+    events = investor_task.get("events")
+    if isinstance(events, list) and len(events) > 0:
+        ok("Investor briefing task includes chain events")
+    else:
+        fail("Investor briefing task events", f"got {events!r}")
 
 
 def test_get_approvals() -> None:
@@ -379,6 +451,52 @@ def test_task_chain() -> None:
             ok("ChainProgressItem uses `created_at` field (api.ts maps → completed_at)")
         else:
             fail("ChainProgressItem has created_at", f"got keys: {list(step.keys())}")
+
+
+def test_investor_task_chain() -> None:
+    print("\n── GET /api/tasks/{id}/chain (investor) ──────────────────")
+    r = get(f"/api/tasks/{DEMO_INVESTOR_TASK_ID}/chain")
+    if r.status_code != 200:
+        fail("GET /chain for investor task 200", f"got {r.status_code}")
+        return
+    ok("GET /chain for investor task returns 200")
+
+    data: dict = r.json()
+    progress = data.get("progress", [])
+    if isinstance(progress, list) and progress:
+        ok("Investor task chain has progress entries")
+        agents = {step.get("agent") for step in progress}
+        if any(agent and "investor-scout" in agent for agent in agents) and any(
+            agent and "investor-analyst" in agent for agent in agents
+        ):
+            ok("Investor task chain includes scout and analyst activity")
+        else:
+            fail("Investor task chain agent coverage", f"got {sorted(agents)!r}")
+    else:
+        fail("Investor task chain progress", f"got {progress!r}")
+
+
+def test_future_endpoint_placeholders() -> None:
+    print("\n── Placeholder coverage for upcoming endpoints ───────────")
+    placeholders = [
+        ("PATCH /api/teams/{id}", "Team settings update per WEBAPP_SPEC"),
+        ("DELETE /api/teams/{id}", "Archive team flow per WEBAPP_SPEC"),
+        ("POST /api/teams/{id}/members", "Dynamic member add flow"),
+        ("DELETE /api/teams/{id}/members/{mid}", "Dynamic member removal flow"),
+        ("GET /api/teams/{id}/preferences", "Preference read API"),
+        ("PUT /api/teams/{id}/preferences", "Preference update API"),
+        ("POST /api/teams/{id}/voice", "Voice sample upload API"),
+        ("GET /api/teams/{id}/voice", "Voice sample retrieval API"),
+        ("GET /api/teams/{id}/published", "Published history API"),
+        ("GET /api/teams/{id}/analytics", "Team analytics API"),
+        ("GET /api/teams/{id}/learnings", "Learning summary API"),
+        ("POST /api/builder/recommend", "Builder recommendation API"),
+        ("POST /api/builder/launch", "Custom launch API"),
+        ("GET /api/builder/categories", "Builder categories API"),
+        ("GET /api/builder/roles", "Builder role library API"),
+    ]
+    for name, detail in placeholders:
+        todo(name, detail)
 
 
 def test_approval_flow() -> None:
@@ -596,21 +714,25 @@ def main() -> None:
     test_get_teams()
     test_get_team_detail()
     test_get_team_members()
+    test_get_investor_team_members()
     test_get_team_tasks()
+    test_get_investor_team_tasks()
     test_get_approvals()
     test_task_output()
     test_task_evidence()
     test_task_reviews()
     test_task_chain()
+    test_investor_task_chain()
     test_approval_id_consistency()
     test_approval_flow()
     test_edit_approve_flow()
     test_revise_flow()
     test_reject_flow()
     test_create_task()
+    test_future_endpoint_placeholders()
 
     print("\n" + "=" * 60)
-    print(f"Results: {PASS} passed, {FAIL} failed")
+    print(f"Results: {PASS} passed, {FAIL} failed, {TODO} placeholders")
     print("=" * 60)
 
     if FAIL > 0:

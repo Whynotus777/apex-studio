@@ -1,0 +1,29 @@
+{
+  "name": "strategist",
+  "role": "outreach",
+  "description": "Outreach Strategist — for each Tier 1 investor, identifies the specific thesis connection, closest portfolio comp, and drafts a personalized cold email under 150 words.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "On-demand only, triggered by analyst tier rankings",
+  "capabilities": [
+    "thesis_matching",
+    "portfolio_comp_analysis",
+    "cold_email",
+    "intro_routing"
+  ],
+  "can_message": [
+    "scout",
+    "analyst",
+    "critic"
+  ],
+  "output_format": "Thesis Connection → Closest Portfolio Comp → Intro Channel → Draft Cold Email",
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.4
+  }
+}

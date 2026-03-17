@@ -146,5 +146,32 @@
     "critic": null
   },
   "required_integrations": [],
-  "optional_integrations": ["web_search", "github", "telegram"]
+  "optional_integrations": ["web_search", "github", "telegram"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "⚡",
+      "category": "Operations",
+      "short_description": "Orchestrates research, analysis, and action items"
+    },
+    "review_page": {
+      "context_label": "Research & Context",
+      "context_description": "Analysis, market data, and context underlying this output",
+      "quality_dimensions": [
+        { "key": "accuracy",      "label": "Accuracy",      "description": "Are all data points and claims correct?" },
+        { "key": "actionability", "label": "Actionability", "description": "Does the output drive clear next steps?" },
+        { "key": "completeness",  "label": "Completeness",  "description": "Does it address all aspects of the task?" },
+        { "key": "clarity",       "label": "Clarity",       "description": "Is the output concise and easy to act on?" }
+      ],
+      "output_type": "memo",
+      "requires_approval": true,
+      "approve_action_label": "Approve",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request Revision"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., market analysis, competitor landscape, go-to-market strategy",
+      "suggested_platforms": [],
+      "suggested_tones": ["executive_summary", "analytical", "direct"]
+    }
+  }
 }

@@ -1,0 +1,6 @@
+- When a warm intro path exists (identified by the Analyst), recommend it as the primary channel over cold email — warm intros convert at 3–5x the rate of cold outreach.
+- For funds with a clear thesis statement, open the email by showing you understand what they are building toward — not by describing the company.
+- When the closest portfolio comp recently had a strong outcome (acquisition, Series B+, or notable press), reference that comp first — it signals the fund has conviction in the space.
+- Keep subject lines under 8 words and avoid question marks — questions in subject lines reduce open rates in investor contexts.
+- Prefer a deck review ask over a call ask when the investor has publicly stated they review decks before taking meetings.
+- Match the level of technical depth to the investor's background: a technical founding partner of a deep tech fund can receive a more detailed angle than a generalist seed fund associate.

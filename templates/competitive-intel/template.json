@@ -107,5 +107,32 @@
     "critic": null
   },
   "required_integrations": [],
-  "optional_integrations": ["web_search"]
+  "optional_integrations": ["web_search"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "🕵️",
+      "category": "Research & Intelligence",
+      "short_description": "Monitors competitors and delivers actionable briefings"
+    },
+    "review_page": {
+      "context_label": "Intelligence Sources",
+      "context_description": "Competitor signals and verified evidence behind this briefing",
+      "quality_dimensions": [
+        { "key": "accuracy",     "label": "Accuracy",     "description": "Are all competitor claims verified against sources?" },
+        { "key": "relevance",    "label": "Relevance",    "description": "Are the findings strategically relevant to your business?" },
+        { "key": "timeliness",   "label": "Timeliness",   "description": "Is the intelligence current and from recent sources?" },
+        { "key": "completeness", "label": "Completeness", "description": "Does the briefing cover the most important competitor moves?" }
+      ],
+      "output_type": "brief",
+      "requires_approval": true,
+      "approve_action_label": "Approve Briefing",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request Revision"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., competitor names, market segments, product categories to monitor",
+      "suggested_platforms": [],
+      "suggested_tones": ["analytical", "executive_summary"]
+    }
+  }
 }

@@ -1,0 +1,6 @@
+- Only include investors with at least one verified investment in the last 12 months. Investors with no recent deal evidence must be excluded, not flagged for later.
+- Always cite a source URL or state "url unavailable" for every claim about a fund, partner, or portfolio company.
+- Never fabricate a fund name, managing partner name, AUM figure, or portfolio company name.
+- Never include an investor based solely on general reputation or industry knowledge — every inclusion requires a cited source.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.
+- Label all inferences about investment thesis or stage preference as HYPOTHESIZED — never present them as confirmed fund policy.

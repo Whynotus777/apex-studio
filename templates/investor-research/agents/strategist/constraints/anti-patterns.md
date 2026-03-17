@@ -1,0 +1,7 @@
+- Do not write the same email for multiple investors with different fund names swapped in — every draft must be materially different based on the specific investor's thesis and portfolio.
+- Do not use superlatives to describe the company ("the only," "the first," "the best") unless the claim is sourced and verifiable.
+- Do not reference a portfolio company's valuation or exit multiple unless the Analyst has cited a specific and verifiable source.
+- Do not recommend a cold LinkedIn connection as the primary intro channel for Tier 1 investors — it signals low effort and gets ignored.
+- Do not include attachments or links in the draft — first emails with attachments have lower open and response rates; the ask should be a meeting, not a download.
+- Do not write more than one email variant per investor unless the task explicitly requests A/B testing — focus depth over breadth.
+- Do not include bullet points in the email body — investor cold emails that read like pitch decks get deleted.

@@ -1,0 +1,8 @@
+- Never fabricate a fund name, AUM figure, check size, managing partner name, or portfolio company name.
+- Never present a paraphrase of a fund's website as a direct quote from a partner.
+- Always include the date and source URL for every portfolio company cited. Undated portfolio citations must be flagged as "date unknown."
+- Do not report a deal as recent if the source is older than 18 months without explicitly labeling it as potentially stale.
+- Flag Tier 1 investors whose most recent cited deal is older than 18 months — the Critic will downgrade them if you do not.
+- Label all inferences about a fund's investment thesis or stage preference as HYPOTHESIZED when they are not directly sourced from the fund's own stated materials.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.
+- Never fabricate contact information, email addresses, or LinkedIn URLs for any partner or fund employee.

@@ -187,3 +187,48 @@ All tests passed. ✅
 | Chain timestamps all `null` in seed data | `scripts/seed_demo.py` | Chain timeline shows "—" for all timestamps. Not a code bug — seed data has `null` created_at. |
 | Task creation spawns real agent (>30s on Intel Mac) | All platforms | Task creation endpoint takes 15-90s depending on model. Frontend has no loading indication beyond the Send button spinner. |
 | `task.created_at` is `null` for seeded tasks | `seed_demo.py` | Task sort by date uses `null` for all seed tasks, so ordering is arbitrary. Non-critical for dev. |
+
+---
+
+## Multi-Template Test Plan
+
+The next smoke pass should stop treating the seeded app as a two-team demo. With the investor-team scaffold in `seed_demo.py`, the plan should validate that the UI and API stay coherent across content, sales, and investor workflows.
+
+### Seeded templates in scope
+
+| Team | Workspace ID | Template ID | Workflow shape |
+|---|---|---|---|
+| Marketing Team | `ws-demo-marketing` | `content-engine` | Discover → Create → Review |
+| Sales Team | `ws-demo-sales` | `sales-outreach` | Discover → Analyze → Write → Review |
+| Investor Team | `ws-demo-investor` | `competitive-intel` | Discover → Analyze → Brief |
+
+### New smoke checks to add
+
+| Area | Check | Expected Result |
+|---|---|---|
+| Teams overview | All 3 seeded teams appear together | Cards render without content-only assumptions |
+| Team detail | Role lists vary by template | Investor team shows `scout`, `analyst`, `critic` only |
+| Activity feed | Non-publishing chains still read cleanly | Investor feed shows scout handoff + analyst synthesis |
+| Approval queue | Only review-ready teams appear | Investor tasks stay out of `/approvals` unless review-ready |
+| Evidence | Research-style teams still expose citations | Investor task evidence renders like content evidence |
+| Idempotency | Re-running seed does not duplicate rows | Workspaces, tasks, evidence, sessions, messages stay stable |
+
+### Placeholder API coverage to promote next
+
+These endpoints are in `docs/WEBAPP_SPEC.md` and should move from placeholder coverage to real assertions as they land:
+
+- `DELETE /api/teams/{id}`
+- `PATCH /api/teams/{id}`
+- `POST /api/teams/{id}/members`
+- `DELETE /api/teams/{id}/members/{mid}`
+- `GET /api/teams/{id}/preferences`
+- `PUT /api/teams/{id}/preferences`
+- `POST /api/teams/{id}/voice`
+- `GET /api/teams/{id}/voice`
+- `GET /api/teams/{id}/published`
+- `GET /api/teams/{id}/analytics`
+- `GET /api/teams/{id}/learnings`
+- `POST /api/builder/recommend`
+- `POST /api/builder/launch`
+- `GET /api/builder/categories`
+- `GET /api/builder/roles`

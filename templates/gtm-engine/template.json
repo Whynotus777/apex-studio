@@ -157,5 +157,32 @@
     }
   },
   "required_integrations": [],
-  "optional_integrations": ["web_search", "linkedin", "twitter", "email"]
+  "optional_integrations": ["web_search", "linkedin", "twitter", "email"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "🚀",
+      "category": "Content & Marketing",
+      "short_description": "Full go-to-market operations from research to published content"
+    },
+    "review_page": {
+      "context_label": "Market Research",
+      "context_description": "Competitive intelligence and market signals behind this GTM output",
+      "quality_dimensions": [
+        { "key": "strategic_fit",  "label": "Strategic Fit",  "description": "Does the output align with the positioning and campaign goals?" },
+        { "key": "accuracy",       "label": "Accuracy",       "description": "Are market claims and competitive facts correct?" },
+        { "key": "completeness",   "label": "Completeness",   "description": "Does it cover all required channels or deliverables?" },
+        { "key": "actionability",  "label": "Actionability",  "description": "Can this be executed immediately with no gaps?" }
+      ],
+      "output_type": "mixed",
+      "requires_approval": true,
+      "approve_action_label": "Approve",
+      "reject_action_label": "Reject",
+      "revise_action_label": "Request Revision"
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., product launch, market expansion, competitor response",
+      "suggested_platforms": ["linkedin", "x", "email"],
+      "suggested_tones": ["professional_authority", "bold_opinionated", "educational_clear"]
+    }
+  }
 }

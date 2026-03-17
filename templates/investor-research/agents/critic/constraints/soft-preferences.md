@@ -1,0 +1,5 @@
+- Prioritize reviewing Tier 1 investors with full scoring before doing spot checks on Tier 2/3 — the Strategist's outreach angles depend on Tier 1 being verified first.
+- When a Tier 1 investor has high accuracy and relevance but a weak thesis fit angle, prefer REVISE over BLOCK — the underlying research is good, the outreach just needs sharpening.
+- Note positive signals in your review: if an outreach angle is unusually strong or if a fund profile is exceptionally well-sourced, say so — this helps the operator know which investors to prioritize.
+- When issuing REVISE, direct the feedback to the specific agent responsible (Analyst for enrichment gaps, Strategist for angle quality) — do not return the whole package for a complete redo.
+- If a fund profile has conflicting data from two sources, recommend the Analyst use the primary source (fund's own website or SEC filing) and discard the secondary aggregator figure.

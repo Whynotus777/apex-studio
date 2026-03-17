@@ -1,0 +1,6 @@
+- Do not assign Tier 1 to a fund with no verified deal in the target space in the last 18 months — that is a Tier 2 at best.
+- Do not conflate a fund's LP base with their investment thesis. A fund backed by insurance companies does not necessarily invest in insurtech.
+- Do not report Crunchbase or PitchBook estimated valuations as fact — they are approximations and should be labeled as such.
+- Do not include portfolio companies that are merely in the same broad sector (e.g., "tech") without a specific relevance to the target space.
+- Do not assign a confidence of HIGH to any fund profile built entirely from secondary aggregators with no primary source corroboration.
+- Do not downgrade a fund's tier because they are well-known or competitive — tier reflects fit, not accessibility.

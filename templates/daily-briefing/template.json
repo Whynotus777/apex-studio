@@ -59,5 +59,31 @@
     }
   },
   "required_integrations": [],
-  "optional_integrations": ["web_search"]
+  "optional_integrations": ["web_search"],
+  "ui_schema": {
+    "team_display": {
+      "icon": "☀️",
+      "category": "Personal & Lifestyle",
+      "short_description": "Morning digest of your chosen topics"
+    },
+    "review_page": {
+      "context_label": "Verified Sources",
+      "context_description": "Sources used to compile today's briefing",
+      "quality_dimensions": [
+        { "key": "relevance",       "label": "Relevance",       "description": "Are the stories relevant to your configured topics?" },
+        { "key": "signal_to_noise", "label": "Signal-to-Noise", "description": "Is the briefing focused on what matters, free of filler?" },
+        { "key": "factual_accuracy","label": "Factual Accuracy","description": "Are the summaries accurate and free from hallucination?" }
+      ],
+      "output_type": "brief",
+      "requires_approval": false,
+      "approve_action_label": null,
+      "reject_action_label": null,
+      "revise_action_label": null
+    },
+    "builder": {
+      "suggested_topics_placeholder": "e.g., AI, climate tech, venture capital, geopolitics",
+      "suggested_platforms": [],
+      "suggested_tones": ["concise", "neutral"]
+    }
+  }
 }
