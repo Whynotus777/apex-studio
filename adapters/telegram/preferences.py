@@ -176,3 +176,36 @@ class UserPreferencesStore:
 
     def set_platform(self, workspace_id: str, platform: str) -> None:
         self.set_pref(workspace_id, "platform", "target", platform)
+
+    # ── X (Twitter) credentials ──────────────────────────────────────────────
+
+    def set_x_credentials(
+        self,
+        workspace_id: str,
+        api_key: str,
+        api_secret: str,
+        access_token: str,
+        access_secret: str,
+    ) -> None:
+        """Store X OAuth 1.0a credentials for this workspace."""
+        for key, val in [
+            ("api_key", api_key),
+            ("api_secret", api_secret),
+            ("access_token", access_token),
+            ("access_secret", access_secret),
+        ]:
+            self.set_pref(workspace_id, "x_credentials", key, val)
+
+    def get_x_credentials(self, workspace_id: str) -> dict[str, str] | None:
+        """Return X credentials dict, or None if any key is missing."""
+        creds: dict[str, str] = {}
+        for key in ("api_key", "api_secret", "access_token", "access_secret"):
+            val = self.get_pref(workspace_id, "x_credentials", key)
+            if not val:
+                return None
+            creds[key] = str(val)
+        return creds
+
+    def clear_x_credentials(self, workspace_id: str) -> None:
+        """Remove stored X credentials for this workspace."""
+        self.clear_prefs(workspace_id, "x_credentials")

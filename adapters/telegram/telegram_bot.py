@@ -27,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from kernel.api import ApexKernel  # noqa: E402
 from kernel.evidence import EvidenceStore  # noqa: E402
+from adapters.publishers.linkedin import post_to_linkedin  # noqa: E402
+from adapters.publishers.x_twitter import post_tweet, post_thread  # noqa: E402
 from adapters.telegram.preferences import (  # noqa: E402
     UserPreferencesStore,
     DEFAULT_SOURCES,
@@ -75,6 +77,31 @@ prefs_store = UserPreferencesStore(str(APEX_HOME / "db" / "apex_state.db"))
 # In-memory store for full writer drafts, keyed by writer_task_id.
 # Allows the "Read Full Draft" button to retrieve the complete text.
 _draft_store: dict[str, str] = {}
+
+# Maps review_id → {workspace_id, writer_task_id, platform} so the
+# approve_review callback can publish to X without re-querying the DB.
+_approval_context_store: dict[int, dict[str, str]] = {}
+
+_GLOBAL_CREDENTIAL_SCOPE = "global"
+
+
+def _split_into_tweets(text: str, limit: int = 280) -> list[str]:
+    """Split text into ≤limit-char chunks at word boundaries for a thread."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for word in text.split():
+        if not current:
+            current = word[:limit]
+        elif len(current) + 1 + len(word) <= limit:
+            current += " " + word
+        else:
+            chunks.append(current)
+            current = word[:limit]
+    if current:
+        chunks.append(current)
+    return chunks
 
 # Pipeline stage → agent role name
 _PIPELINE_ROLE_MAP: dict[str, str] = {
@@ -694,6 +721,8 @@ async def start_command(update: Update, context: Any) -> None:
         "/launch <template_id> — Launch a template\n"
         "/workspaces — Active workspaces\n"
         "/workspace <workspace_id> — Workspace detail\n"
+        "/connect linkedin <access_token> — Store LinkedIn publishing token\n"
+        "/connect x <api_key> <api_secret> <access_token> <access_secret> — Store X credentials\n"
         "/evidence <task_id> — Stored evidence for a task\n"
         "/task <workspace_id> <mission> — Create and run a task\n"
         "/approvals — Pending approval queue\n"
@@ -965,14 +994,15 @@ async def _run_content_engine_chain(
     pref_voice_samples = prefs_store.get_voice_samples(workspace_id)
 
     # ── Step 1: Scout (inject source preferences into task description) ─────
+    # List domain names only — no site: operators. DuckDuckGo's HTML search
+    # cannot handle site: filters and returns 0 results when they appear in
+    # queries. The query generator uses these domain names as topic bias only.
     source_hint = ", ".join(pref_sources)
-    site_filters = " OR ".join(f"site:{s}" for s in pref_sources[:5])
     scout_desc = (
         f"Workspace: {workspace_id}\n"
         f"Issued via Telegram.\n\n"
         f"## Source Preferences\n"
-        f"Prioritize these domains: {source_hint}\n"
-        f"Suggested site filters for queries: {site_filters}"
+        f"Prioritize content from these domains (do not use site: operators): {source_hint}"
     )
     try:
         _update_task_description(scout_task_id, scout_desc)
@@ -1253,6 +1283,12 @@ async def _run_content_engine_chain(
         reply_markup = None
         keyboard_rows = []
         if review_id is not None:
+            # Store context so approve_review callback can publish to X
+            _approval_context_store[review_id] = {
+                "workspace_id": workspace_id,
+                "writer_task_id": writer_task_id,
+                "platform": pref_platform or "",
+            }
             keyboard_rows.append([
                 InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
                 InlineKeyboardButton("✏️ Edit", callback_data=f"edit_review:{review_id}"),
@@ -1575,8 +1611,8 @@ async def preferences_command(update: Update, context: Any) -> None:
         await update.message.reply_text(
             "Usage:\n"
             "  /preferences <ws> — show current sources\n"
-            "  /preferences <ws> add <domain>\n"
-            "  /preferences <ws> remove <domain>\n"
+            "  /preferences <ws> add <domain> [domain2 ...]\n"
+            "  /preferences <ws> remove <domain> [domain2 ...]\n"
             "  /preferences <ws> reset"
         )
         return
@@ -1594,30 +1630,35 @@ async def preferences_command(update: Update, context: Any) -> None:
 
     if sub == "add":
         if len(args) < 3:
-            await update.message.reply_text("Usage: /preferences <ws> add <domain>")
+            await update.message.reply_text("Usage: /preferences <ws> add <domain> [domain2 ...]")
             return
-        domain = args[2].lower().strip()
-        prefs_store.add_source(workspace_id, domain)
+        domains = [a.lower().strip() for a in args[2:]]
+        for domain in domains:
+            prefs_store.add_source(workspace_id, domain)
         sources = prefs_store.get_sources(workspace_id)
+        added_list = ", ".join(f"`{d}`" for d in domains)
         await update.message.reply_text(
-            f"✅ Added `{domain}`\n\nCurrent sources:\n" + "\n".join(f"• {s}" for s in sources),
+            f"✅ Added {added_list}\n\nCurrent sources:\n" + "\n".join(f"• {s}" for s in sources),
             parse_mode="Markdown",
         )
 
     elif sub == "remove":
         if len(args) < 3:
-            await update.message.reply_text("Usage: /preferences <ws> remove <domain>")
+            await update.message.reply_text("Usage: /preferences <ws> remove <domain> [domain2 ...]")
             return
-        domain = args[2].lower().strip()
-        removed = prefs_store.remove_source(workspace_id, domain)
-        if removed:
-            sources = prefs_store.get_sources(workspace_id)
-            await update.message.reply_text(
-                f"🗑️ Removed `{domain}`\n\nCurrent sources:\n" + "\n".join(f"• {s}" for s in sources),
-                parse_mode="Markdown",
-            )
-        else:
-            await update.message.reply_text(f"`{domain}` not found in preferences.", parse_mode="Markdown")
+        domains = [a.lower().strip() for a in args[2:]]
+        removed_domains = [d for d in domains if prefs_store.remove_source(workspace_id, d)]
+        not_found = [d for d in domains if d not in removed_domains]
+        sources = prefs_store.get_sources(workspace_id)
+        lines = []
+        if removed_domains:
+            removed_list = ", ".join(f"`{d}`" for d in removed_domains)
+            lines.append(f"🗑️ Removed {removed_list}")
+        if not_found:
+            nf_list = ", ".join(f"`{d}`" for d in not_found)
+            lines.append(f"⚠️ Not found: {nf_list}")
+        lines += ["", "Current sources:"] + [f"• {s}" for s in sources]
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     elif sub == "reset":
         prefs_store.reset_sources(workspace_id)
@@ -1642,8 +1683,8 @@ async def preferences_command(update: Update, context: Any) -> None:
             f"🗣️ *Voice samples:* {voice_count}/10",
             "",
             "Commands:",
-            "  `/preferences <ws> add <domain>`",
-            "  `/preferences <ws> remove <domain>`",
+            "  `/preferences <ws> add <domain> [domain2 ...]`",
+            "  `/preferences <ws> remove <domain> [domain2 ...]`",
             "  `/preferences <ws> reset`",
             "  `/platform <ws> <linkedin|x|tiktok|instagram>`",
             "  `/voice <ws> <post text>`",
@@ -1782,6 +1823,106 @@ async def platform_command(update: Update, context: Any) -> None:
     )
 
 
+async def xcreds_command(update: Update, context: Any) -> None:
+    """
+    /xcreds <workspace_id> <api_key> <api_secret> <access_token> <access_secret>
+    /xcreds <workspace_id> clear
+    /xcreds <workspace_id> — show status (does not reveal secrets)
+
+    Stores X (Twitter) OAuth 1.0a credentials for auto-publishing approved drafts.
+    Get credentials at developer.x.com — App settings → Keys and Tokens.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "  `/xcreds <ws_id> <api_key> <api_secret> <access_token> <access_secret>`\n"
+            "  `/xcreds <ws_id> clear` — remove stored credentials\n"
+            "  `/xcreds <ws_id>` — show connection status",
+            parse_mode="Markdown",
+        )
+        return
+
+    workspace_id = args[0]
+
+    if len(args) == 2 and args[1].lower() == "clear":
+        prefs_store.clear_x_credentials(workspace_id)
+        await update.message.reply_text(f"🗑 X credentials cleared for `{workspace_id}`.", parse_mode="Markdown")
+        return
+
+    if len(args) == 1:
+        creds = prefs_store.get_x_credentials(workspace_id)
+        if creds:
+            await update.message.reply_text(
+                f"✅ X credentials configured for `{workspace_id}`.\n"
+                f"API Key: `{creds['api_key'][:8]}...`",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ No X credentials found for `{workspace_id}`.\n\n"
+                "Use:\n"
+                "`/xcreds <ws_id> <api_key> <api_secret> <access_token> <access_secret>`",
+                parse_mode="Markdown",
+            )
+        return
+
+    if len(args) != 5:
+        await update.message.reply_text(
+            "Expected 5 arguments: `<ws_id> <api_key> <api_secret> <access_token> <access_secret>`",
+            parse_mode="Markdown",
+        )
+        return
+
+    _, api_key, api_secret, access_token, access_secret = args
+    prefs_store.set_x_credentials(workspace_id, api_key, api_secret, access_token, access_secret)
+    await update.message.reply_text(
+        f"✅ X credentials saved for `{workspace_id}`.\n"
+        "Approved drafts with platform=x will now auto-publish.",
+        parse_mode="Markdown",
+    )
+
+
+async def connect_command(update: Update, context: Any) -> None:
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "  /connect linkedin <access_token>\n"
+            "  /connect x <api_key> <api_secret> <access_token> <access_secret>"
+        )
+        return
+
+    provider = args[0].lower().strip()
+    if provider == "linkedin":
+        if len(args) != 2:
+            await update.message.reply_text("Usage: /connect linkedin <access_token>")
+            return
+        prefs_store.set_pref(_GLOBAL_CREDENTIAL_SCOPE, "credential", "linkedin_access_token", args[1].strip())
+        await update.message.reply_text("✅ LinkedIn credential stored for auto-publishing.")
+        return
+
+    if provider == "x":
+        if len(args) != 5:
+            await update.message.reply_text(
+                "Usage: /connect x <api_key> <api_secret> <access_token> <access_secret>"
+            )
+            return
+        prefs_store.set_pref(_GLOBAL_CREDENTIAL_SCOPE, "credential", "x_api_key", args[1].strip())
+        prefs_store.set_pref(_GLOBAL_CREDENTIAL_SCOPE, "credential", "x_api_secret", args[2].strip())
+        prefs_store.set_pref(_GLOBAL_CREDENTIAL_SCOPE, "credential", "x_access_token", args[3].strip())
+        prefs_store.set_pref(_GLOBAL_CREDENTIAL_SCOPE, "credential", "x_access_secret", args[4].strip())
+        await update.message.reply_text("✅ X credentials stored.")
+        return
+
+    await update.message.reply_text("Supported providers: linkedin, x")
+
+
 async def handle_message(update: Update, context: Any) -> None:
     """Route free-text messages through Apex."""
     if not is_authorized(update.effective_chat.id):
@@ -1810,11 +1951,102 @@ async def handle_callback(update: Update, context: Any) -> None:
 
     if action == "approve_review":
         try:
+            review_rows = kernel._fetch_all(
+                """
+                SELECT r.id, r.task_id, t.workspace_id
+                FROM reviews r
+                LEFT JOIN tasks t ON t.id = r.task_id
+                WHERE r.id = ?
+                """,
+                (int(value),),
+            )
+            workspace_id = review_rows[0]["workspace_id"] if review_rows else None
+            task_id = review_rows[0]["task_id"] if review_rows else None
+
             kernel.approve_action(int(value))
-            # Edit the card to show approval confirmation (strip buttons)
+
+            auto_published = False
+            publish_msg = ""
+            if workspace_id and task_id:
+                try:
+                    ws = kernel.get_workspace(workspace_id)
+                except Exception:
+                    ws = {}
+                platform = prefs_store.get_platform(workspace_id)
+                # Use _approval_context_store for writer_task_id when available
+                ctx = _approval_context_store.get(int(value), {})
+                writer_task_id = ctx.get("writer_task_id") or task_id
+                full_draft = _draft_store.get(writer_task_id) or _draft_store.get(task_id)
+                access_token = prefs_store.get_pref(
+                    _GLOBAL_CREDENTIAL_SCOPE,
+                    "credential",
+                    "linkedin_access_token",
+                )
+                if (
+                    ws.get("template_id") == "content-engine"
+                    and platform == "linkedin"
+                    and access_token
+                    and full_draft
+                ):
+                    published = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: post_to_linkedin(str(access_token), full_draft),
+                    )
+                    auto_published = True
+                    publish_msg = f"✅ Published to LinkedIn! Post URL: {published.get('post_url', '')}"
+                elif ws.get("template_id") == "content-engine" and platform == "linkedin":
+                    publish_msg = "✅ Approved. Connect LinkedIn to auto-publish: /connect linkedin <access_token>"
+                elif (
+                    ws.get("template_id") == "content-engine"
+                    and platform == "x"
+                    and full_draft
+                ):
+                    x_creds = prefs_store.get_x_credentials(workspace_id)
+                    if x_creds:
+                        try:
+                            if len(full_draft) <= 280:
+                                result = await asyncio.get_event_loop().run_in_executor(
+                                    None,
+                                    lambda: post_tweet(
+                                        api_key=x_creds["api_key"],
+                                        api_secret=x_creds["api_secret"],
+                                        access_token=x_creds["access_token"],
+                                        access_secret=x_creds["access_secret"],
+                                        text=full_draft,
+                                    ),
+                                )
+                                auto_published = True
+                                publish_msg = f"✅ Published to X! Tweet URL: {result['tweet_url']}"
+                            else:
+                                tweets = _split_into_tweets(full_draft)
+                                tweet_ids = await asyncio.get_event_loop().run_in_executor(
+                                    None,
+                                    lambda: post_thread(
+                                        api_key=x_creds["api_key"],
+                                        api_secret=x_creds["api_secret"],
+                                        access_token=x_creds["access_token"],
+                                        access_secret=x_creds["access_secret"],
+                                        tweets=tweets,
+                                    ),
+                                )
+                                auto_published = True
+                                url = f"https://x.com/i/web/status/{tweet_ids[0]}"
+                                publish_msg = f"✅ Published to X as {len(tweets)}-tweet thread! URL: {url}"
+                        except Exception as x_exc:
+                            publish_msg = f"⚠️ X publishing failed: {x_exc}"
+                    else:
+                        publish_msg = (
+                            "ℹ️ Platform is X but no credentials found for this workspace.\n"
+                            "Use `/xcreds <ws_id> <api_key> <api_secret> <access_token> <access_secret>` to connect X."
+                        )
+
             original_text = query.message.text or ""
-            approved_text = original_text + "\n\n✅ Approved and queued."
+            approved_text = original_text + "\n\n✅ Approved."
             await query.edit_message_text(approved_text)
+            if publish_msg:
+                await query.message.reply_text(publish_msg)
+            elif not auto_published:
+                await query.message.reply_text("✅ Approved.")
         except Exception as exc:
             await query.message.reply_text(f"Approval failed: {exc}")
         return
@@ -1934,6 +2166,8 @@ def main() -> None:
     app.add_handler(CommandHandler("preferences", preferences_command))
     app.add_handler(CommandHandler("voice", voice_command))
     app.add_handler(CommandHandler("platform", platform_command))
+    app.add_handler(CommandHandler("xcreds", xcreds_command))
+    app.add_handler(CommandHandler("connect", connect_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

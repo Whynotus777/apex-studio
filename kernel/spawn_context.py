@@ -28,6 +28,24 @@ TASK_ID = os.environ.get("APEX_TASK", "")
 sys.path.insert(0, APEX_HOME)
 
 
+def _strip_site_operators(query: str) -> str:
+    """Remove site: tokens from a search query.
+
+    DuckDuckGo's HTML endpoint ignores or mishandles site: operators,
+    causing zero results. Strip them and collapse extra whitespace.
+    Example: 'AI agents 2026 site:arxiv.org OR site:github.com'
+             → 'AI agents 2026'
+    """
+    import re
+    # Remove 'site:...' tokens (including any trailing OR/AND conjunctions)
+    cleaned = re.sub(r'\bsite:\S+', '', query, flags=re.IGNORECASE)
+    # Remove orphaned boolean operators left after stripping site: tokens
+    cleaned = re.sub(r'\b(OR|AND)\s*(OR|AND\b|$)', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^\s*(OR|AND)\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*(OR|AND)\s*$', '', cleaned, flags=re.IGNORECASE)
+    return ' '.join(cleaned.split())
+
+
 def generate_queries(task_title: str, task_text: str) -> list[str]:
     """Use the configured model to generate 3 focused search queries.
 
@@ -37,7 +55,10 @@ def generate_queries(task_title: str, task_text: str) -> list[str]:
     """
     prompt = (
         "Generate exactly 3 short web search queries (one per line, no numbering, "
-        "no extra text) for this research task. Prioritize sources from the last 2 weeks. "
+        "no extra text) for this research task. "
+        "IMPORTANT: Do NOT use site: operators — they break the search engine. "
+        "Use plain keyword queries only. "
+        "Prioritize sources from the last 2 weeks. "
         "Accept sources up to 6 months old only if highly relevant. Add '2026' or "
         "'March 2026' to at least one query to bias toward recent results.\n" + task_text
     )
@@ -47,7 +68,7 @@ def generate_queries(task_title: str, task_text: str) -> list[str]:
     fallback = [task_title.strip()[:150]] if task_title.strip() else [task_text[:150]]
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as sf:
-            sf.write("You are a search query generator. Output only queries, one per line.")
+            sf.write("You are a search query generator. Output only queries, one per line. Never use site: operators.")
             sys_path = sf.name
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as uf:
             uf.write(prompt)
@@ -73,7 +94,12 @@ def generate_queries(task_title: str, task_text: str) -> list[str]:
             for line in result.stdout.strip().split("\n")
             if line.strip()
         ]
-        return lines[:3] if lines else fallback
+        # Strip any site: operators the model may have generated despite instructions.
+        # This is defense-in-depth: DuckDuckGo returns 0 results for site: queries.
+        cleaned = [_strip_site_operators(q) for q in lines if line.strip()]
+        # Drop queries that became empty after stripping
+        cleaned = [q for q in cleaned if q]
+        return cleaned[:3] if cleaned else fallback
     except Exception as exc:
         print(f"[spawn_context] generate_queries failed: {exc}", file=sys.stderr)
         return fallback
