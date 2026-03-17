@@ -27,6 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from kernel.api import ApexKernel  # noqa: E402
 from kernel.evidence import EvidenceStore  # noqa: E402
+from adapters.telegram.preferences import (  # noqa: E402
+    UserPreferencesStore,
+    DEFAULT_SOURCES,
+    PLATFORM_INSTRUCTIONS,
+    VALID_PLATFORMS,
+)
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -64,6 +70,11 @@ ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 kernel = ApexKernel(APEX_HOME)
 evidence_store = EvidenceStore(str(APEX_HOME / "db" / "apex_state.db"))
+prefs_store = UserPreferencesStore(str(APEX_HOME / "db" / "apex_state.db"))
+
+# In-memory store for full writer drafts, keyed by writer_task_id.
+# Allows the "Read Full Draft" button to retrieve the complete text.
+_draft_store: dict[str, str] = {}
 
 # Pipeline stage → agent role name
 _PIPELINE_ROLE_MAP: dict[str, str] = {
@@ -96,6 +107,37 @@ def is_authorized(chat_id: int | str | None) -> bool:
 
 def _truncate(text: str, limit: int = 4000) -> str:
     return text if len(text) <= limit else text[:limit] + "\n\n... (truncated)"
+
+
+def _split_message(text: str, limit: int = 4096) -> list[str]:
+    """Split text into chunks ≤ limit chars, breaking at paragraph boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        cut = remaining[:limit]
+        # Prefer paragraph boundary
+        boundary = cut.rfind("\n\n")
+        if boundary < limit // 2:
+            boundary = cut.rfind("\n")
+        if boundary < limit // 4:
+            boundary = limit
+        chunks.append(remaining[:boundary].rstrip())
+        remaining = remaining[boundary:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _update_task_description(task_id: str, description: str) -> None:
+    """Overwrite the description of an existing task row directly in SQLite."""
+    with kernel._connect() as conn:
+        conn.execute(
+            "UPDATE tasks SET description = ? WHERE id = ?",
+            (description, task_id),
+        )
+        conn.commit()
 
 
 async def _safe_reply(message: Any, text: str, **kwargs: Any) -> None:
@@ -917,7 +959,26 @@ async def _run_content_engine_chain(
     Scout runs on scout_task_id. Writer gets its own task (inherits evidence
     via workspace prefix). Critic runs via pipeline on the writer task.
     """
-    # ── Step 1: Scout ──────────────────────────────────────────────────────
+    # ── Load workspace preferences ──────────────────────────────────────────
+    pref_sources = prefs_store.get_sources(workspace_id)
+    pref_platform = prefs_store.get_platform(workspace_id)
+    pref_voice_samples = prefs_store.get_voice_samples(workspace_id)
+
+    # ── Step 1: Scout (inject source preferences into task description) ─────
+    source_hint = ", ".join(pref_sources)
+    site_filters = " OR ".join(f"site:{s}" for s in pref_sources[:5])
+    scout_desc = (
+        f"Workspace: {workspace_id}\n"
+        f"Issued via Telegram.\n\n"
+        f"## Source Preferences\n"
+        f"Prioritize these domains: {source_hint}\n"
+        f"Suggested site filters for queries: {site_filters}"
+    )
+    try:
+        _update_task_description(scout_task_id, scout_desc)
+    except Exception as exc:
+        print(f"[DEBUG] scout task desc update failed (non-fatal): {exc}", flush=True)
+
     print(f"[DEBUG] CE chain: spawning scout={scout_agent} task={scout_task_id}", flush=True)
     try:
         scout_resp = await loop.run_in_executor(None, kernel.spawn_agent, scout_agent, scout_task_id)
@@ -931,17 +992,29 @@ async def _run_content_engine_chain(
     chain_log.append({"agent": scout_agent, "status": scout_resp.get("status"), "action": scout_action})
     await _safe_reply(message, f"🔍 Scout done — {scout_action}\n✍️ Spawning Writer…")
 
-    # ── Step 2: Writer (new task — inherits Scout evidence via workspace prefix) ──
+    # ── Step 2: Writer (inject platform + voice into task description) ──────
     writer_agent = f"{workspace_id}-writer"
+    writer_desc_parts = [
+        f"Workspace: {workspace_id}",
+        f"Based on Scout research for: {scout_task_id}",
+        "Use all available Search Evidence. Draft the content requested in the title.",
+    ]
+    if pref_platform and pref_platform in PLATFORM_INSTRUCTIONS:
+        platform_instr = PLATFORM_INSTRUCTIONS[pref_platform]
+        writer_desc_parts.append(
+            f"\n## Platform Instructions ({pref_platform.upper()})\n{platform_instr}"
+        )
+    if pref_voice_samples:
+        samples_block = "\n\n---\n\n".join(pref_voice_samples)
+        writer_desc_parts.append(
+            f"\n## Voice Reference\n"
+            f"Match the tone, style, and structure of these sample posts:\n\n{samples_block}"
+        )
     try:
         writer_task_id = kernel.create_task({
             "goal_id": goal_id,
             "title": mission,
-            "description": (
-                f"Workspace: {workspace_id}\n"
-                f"Based on Scout research for: {scout_task_id}\n"
-                "Use all available Search Evidence. Draft the content requested in the title."
-            ),
+            "description": "\n".join(writer_desc_parts),
             "status": "backlog",
         })
         kernel.assign_task(writer_task_id, writer_agent)
@@ -964,6 +1037,9 @@ async def _run_content_engine_chain(
     writer_state = writer_status.get("state", "") if isinstance(writer_status, dict) else str(writer_status)
     print(f"[DEBUG] writer done: status={writer_state} preview={writer_preview[:60]!r}", flush=True)
     chain_log.append({"agent": writer_agent, "status": writer_resp.get("status"), "action": writer_action})
+    # Store full draft for "Read Full Draft" button retrieval
+    if writer_preview:
+        _draft_store[writer_task_id] = writer_preview
 
     # ── Step 3: Critic (+ 1 revision loop if REVISE) ──────────────────────
     await _safe_reply(message, f"✍️ Writer done — {writer_action}\n🔍 Running Critic…")
@@ -1000,18 +1076,31 @@ async def _run_content_engine_chain(
             parse_mode="Markdown",
         )
 
-        # Create a new Writer task with Critic feedback injected
+        # Create a new Writer task with Critic feedback + original prefs injected
+        revision_desc_parts = [
+            f"Workspace: {workspace_id}",
+            f"REVISION REQUEST from Critic: {critic_feedback}",
+            "",
+            f"Based on Scout research for: {scout_task_id}",
+            f"Previous draft task: {writer_task_id}",
+            "Address all Critic feedback. Use all available Search Evidence.",
+        ]
+        if pref_platform and pref_platform in PLATFORM_INSTRUCTIONS:
+            revision_desc_parts.append(
+                f"\n## Platform Instructions ({pref_platform.upper()})\n"
+                f"{PLATFORM_INSTRUCTIONS[pref_platform]}"
+            )
+        if pref_voice_samples:
+            samples_block = "\n\n---\n\n".join(pref_voice_samples)
+            revision_desc_parts.append(
+                f"\n## Voice Reference\n"
+                f"Match the tone, style, and structure of these sample posts:\n\n{samples_block}"
+            )
         try:
             revision_task_id = kernel.create_task({
                 "goal_id": goal_id,
                 "title": mission,
-                "description": (
-                    f"Workspace: {workspace_id}\n"
-                    f"REVISION REQUEST from Critic: {critic_feedback}\n\n"
-                    f"Based on Scout research for: {scout_task_id}\n"
-                    f"Previous draft task: {writer_task_id}\n"
-                    "Address all Critic feedback. Use all available Search Evidence."
-                ),
+                "description": "\n".join(revision_desc_parts),
                 "status": "backlog",
             })
             kernel.assign_task(revision_task_id, writer_agent)
@@ -1031,6 +1120,9 @@ async def _run_content_engine_chain(
                 rev_action = _infer_writer_action(rev_resp)
                 print(f"[DEBUG] revision writer done: preview={writer_preview[:60]!r}", flush=True)
                 chain_log.append({"agent": writer_agent, "status": rev_resp.get("status"), "action": f"Revised — {rev_action}"})
+                # Update draft store with revised output
+                if writer_preview:
+                    _draft_store[writer_task_id] = writer_preview
 
                 # Re-run Critic on the revised task
                 try:
@@ -1059,12 +1151,20 @@ async def _run_content_engine_chain(
             })
         review_id = review.get("id")
         reply_markup = None
+        keyboard_rows = []
         if review_id is not None:
-            reply_markup = InlineKeyboardMarkup([[
+            keyboard_rows.append([
                 InlineKeyboardButton("✅ Approve", callback_data=f"approve_review:{review_id}"),
                 InlineKeyboardButton("✏️ Edit", callback_data=f"edit_review:{review_id}"),
                 InlineKeyboardButton("❌ Reject", callback_data=f"reject_review:{review_id}"),
-            ]])
+            ])
+        # Always add "Read Full Draft" when we have a full draft stored
+        if writer_task_id in _draft_store:
+            keyboard_rows.append([
+                InlineKeyboardButton("📄 Read Full Draft", callback_data=f"read_draft:{writer_task_id}"),
+            ])
+        if keyboard_rows:
+            reply_markup = InlineKeyboardMarkup(keyboard_rows)
         try:
             card = _content_engine_operator_card(writer_task_id, chain_log, writer_preview, scout_task_id=scout_task_id)
             print(f"[DEBUG] operator card ({len(card)} chars): {card[:100]!r}", flush=True)
@@ -1354,6 +1454,227 @@ async def spawn_command(update: Update, context: Any) -> None:
     await _safe_reply(update.message, _truncate(_format_spawn_result(response)))
 
 
+async def preferences_command(update: Update, context: Any) -> None:
+    """
+    /preferences <workspace_id> [add <domain> | remove <domain> | reset]
+
+    Manage preferred source domains for Scout's search queries.
+    Default sources are used when none are stored.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "  /preferences <ws> — show current sources\n"
+            "  /preferences <ws> add <domain>\n"
+            "  /preferences <ws> remove <domain>\n"
+            "  /preferences <ws> reset"
+        )
+        return
+
+    workspace_id = args[0]
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    sub = args[1].lower() if len(args) > 1 else "show"
+
+    if sub == "add":
+        if len(args) < 3:
+            await update.message.reply_text("Usage: /preferences <ws> add <domain>")
+            return
+        domain = args[2].lower().strip()
+        prefs_store.add_source(workspace_id, domain)
+        sources = prefs_store.get_sources(workspace_id)
+        await update.message.reply_text(
+            f"✅ Added `{domain}`\n\nCurrent sources:\n" + "\n".join(f"• {s}" for s in sources),
+            parse_mode="Markdown",
+        )
+
+    elif sub == "remove":
+        if len(args) < 3:
+            await update.message.reply_text("Usage: /preferences <ws> remove <domain>")
+            return
+        domain = args[2].lower().strip()
+        removed = prefs_store.remove_source(workspace_id, domain)
+        if removed:
+            sources = prefs_store.get_sources(workspace_id)
+            await update.message.reply_text(
+                f"🗑️ Removed `{domain}`\n\nCurrent sources:\n" + "\n".join(f"• {s}" for s in sources),
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(f"`{domain}` not found in preferences.", parse_mode="Markdown")
+
+    elif sub == "reset":
+        prefs_store.reset_sources(workspace_id)
+        await update.message.reply_text(
+            "🔄 Reset to defaults:\n" + "\n".join(f"• {s}" for s in DEFAULT_SOURCES)
+        )
+
+    else:
+        # Show current sources
+        sources = prefs_store.get_sources(workspace_id)
+        platform = prefs_store.get_platform(workspace_id)
+        voice_count = len(prefs_store.get_voice_samples(workspace_id))
+        is_default = sources == list(DEFAULT_SOURCES)
+        source_label = "_(defaults)_" if is_default else ""
+        lines = [
+            f"⚙️ *Preferences for* `{workspace_id}`",
+            "",
+            f"📎 *Sources* {source_label}",
+        ] + [f"  • {s}" for s in sources] + [
+            "",
+            f"🎯 *Platform:* {platform or '_(not set)_'}",
+            f"🗣️ *Voice samples:* {voice_count}/10",
+            "",
+            "Commands:",
+            "  `/preferences <ws> add <domain>`",
+            "  `/preferences <ws> remove <domain>`",
+            "  `/preferences <ws> reset`",
+            "  `/platform <ws> <linkedin|x|tiktok|instagram>`",
+            "  `/voice <ws> <post text>`",
+        ]
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def voice_command(update: Update, context: Any) -> None:
+    """
+    /voice <workspace_id> [clear]
+    /voice <workspace_id> <post text>
+
+    Manage voice samples used to guide Writer tone and style.
+    Max 10 samples. Each call to /voice <ws> <text> adds one sample.
+    /voice <ws> clear — removes all samples.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    # Parse raw text to preserve newlines in multi-line posts
+    raw = update.message.text or ""
+    raw_parts = raw.split(None, 2)  # ["/voice", "<ws>", "<post text with newlines>"]
+
+    if len(raw_parts) < 2:
+        await update.message.reply_text(
+            "Usage:\n"
+            "  /voice <ws> <post text> — add a voice sample\n"
+            "  /voice <ws> clear — remove all samples\n"
+            "  /voice <ws> — show current samples"
+        )
+        return
+
+    workspace_id = raw_parts[1]
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    post_text = raw_parts[2].strip() if len(raw_parts) > 2 else ""
+
+    if post_text.lower() == "clear":
+        n = prefs_store.clear_voice_samples(workspace_id)
+        await update.message.reply_text(f"🗑️ Cleared {n} voice sample(s).")
+        return
+
+    if not post_text:
+        # Show current samples
+        samples = prefs_store.get_voice_samples(workspace_id)
+        if not samples:
+            await update.message.reply_text(
+                f"No voice samples stored for `{workspace_id}`.\n\n"
+                "Add one with:\n`/voice <ws> <your best post text>`",
+                parse_mode="Markdown",
+            )
+            return
+        lines = [f"🗣️ *Voice samples for* `{workspace_id}` ({len(samples)}/10)\n"]
+        for i, s in enumerate(samples, 1):
+            lines.append(f"*{i}.* {_summarise(s, 120)}")
+        lines.append("\n`/voice <ws> clear` to reset all samples.")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    # Add the sample
+    try:
+        count = prefs_store.add_voice_sample(workspace_id, post_text)
+        await update.message.reply_text(
+            f"✅ Voice sample {count}/10 saved.\n\n"
+            f"_Preview: {_summarise(post_text, 100)}_\n\n"
+            "Writer will match this tone on next task.",
+            parse_mode="Markdown",
+        )
+    except ValueError as exc:
+        await update.message.reply_text(f"⚠️ {exc}")
+
+
+async def platform_command(update: Update, context: Any) -> None:
+    """
+    /platform <workspace_id> <linkedin|x|tiktok|instagram>
+    /platform <workspace_id> — show current platform
+
+    Sets the target platform. Writer receives platform-specific formatting
+    instructions on every task in this workspace.
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: /platform <workspace_id> <linkedin|x|tiktok|instagram>"
+        )
+        return
+
+    workspace_id = args[0]
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    if len(args) < 2:
+        platform = prefs_store.get_platform(workspace_id)
+        if platform:
+            instr = PLATFORM_INSTRUCTIONS.get(platform, "")
+            await update.message.reply_text(
+                f"🎯 *Platform:* `{platform}`\n\n_{instr}_",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                f"No platform set for `{workspace_id}`.\n\n"
+                f"Options: {', '.join(VALID_PLATFORMS)}\n"
+                "Usage: `/platform <ws> <platform>`",
+                parse_mode="Markdown",
+            )
+        return
+
+    platform = args[1].lower().strip()
+    if platform not in VALID_PLATFORMS:
+        await update.message.reply_text(
+            f"Unknown platform `{platform}`.\n"
+            f"Valid options: {', '.join(sorted(VALID_PLATFORMS))}",
+            parse_mode="Markdown",
+        )
+        return
+
+    prefs_store.set_platform(workspace_id, platform)
+    instr = PLATFORM_INSTRUCTIONS[platform]
+    await update.message.reply_text(
+        f"✅ Platform set to *{platform}*\n\n_{instr}_",
+        parse_mode="Markdown",
+    )
+
+
 async def handle_message(update: Update, context: Any) -> None:
     """Route free-text messages through Apex."""
     if not is_authorized(update.effective_chat.id):
@@ -1409,6 +1730,17 @@ async def handle_callback(update: Update, context: Any) -> None:
             await query.edit_message_text(edit_text)
         except Exception as exc:
             await query.message.reply_text(f"Edit request failed: {exc}")
+        return
+
+    if action == "read_draft":
+        full_text = _draft_store.get(value)
+        if not full_text:
+            await query.message.reply_text("Draft not available (session may have restarted).")
+            return
+        chunks = _split_message(full_text, limit=4096)
+        for i, chunk in enumerate(chunks):
+            header = f"📄 *Full Draft* ({i + 1}/{len(chunks)})\n\n" if len(chunks) > 1 else "📄 *Full Draft*\n\n"
+            await query.message.reply_text(header + chunk)
         return
 
     if action == "investigate":
@@ -1492,6 +1824,9 @@ def main() -> None:
     app.add_handler(CommandHandler("approvals", approvals_command))
     app.add_handler(CommandHandler("rollup", rollup_command))
     app.add_handler(CommandHandler("spawn", spawn_command))
+    app.add_handler(CommandHandler("preferences", preferences_command))
+    app.add_handler(CommandHandler("voice", voice_command))
+    app.add_handler(CommandHandler("platform", platform_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
