@@ -1,0 +1,25 @@
+{
+  "name": "critic",
+  "role": "quality_gate",
+  "description": "Source Verifier — verifies all competitor claims against retrieved evidence and blocks unsupported assertions.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "api_review": "claude-opus",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": null,
+  "heartbeat_description": "Continuous — processes review queue as items arrive",
+  "capabilities": ["review", "citation_validation", "claim_verification", "blocking"],
+  "can_message": ["scout", "analyst"],
+  "stakes_routing": {
+    "low": "qwen3.5-apex",
+    "medium": "claude-opus",
+    "high": "claude-opus"
+  },
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.1
+  }
+}

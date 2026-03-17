@@ -51,6 +51,49 @@ def _strip_site_operators(query: str) -> str:
     return ' '.join(cleaned.split())
 
 
+def _strip_metadata_sections(text: str) -> str:
+    """Remove workspace metadata blocks from task text before query generation.
+
+    Task descriptions include operational sections (Source Preferences, Platform
+    Instructions, Workspace IDs) that are implementation details, not topic signals.
+    Feeding these to the query generator causes models to infer topics from domain
+    names (e.g. mckinsey.com → "consulting/PE") instead of from the task title.
+
+    Strips any section whose heading matches known metadata patterns, keeping only
+    the content that describes what to research.
+    """
+    import re
+    # Remove markdown sections whose headings are metadata, not research topics.
+    # Pattern: ## Heading followed by content up to the next ## heading or end of string.
+    metadata_headings = re.compile(
+        r"##\s*(Source Preferences?|Platform Instructions?|Workspace|"
+        r"Preferred Domains?|Voice Reference|Humanize Pass)[^\n]*\n.*?(?=\n##|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    cleaned = metadata_headings.sub("", text)
+    # Also strip bare "Workspace: ws-..." lines
+    cleaned = re.sub(r"(?m)^Workspace:\s*\S+\s*\n?", "", cleaned)
+    cleaned = re.sub(r"(?m)^Issued via \S+\.\s*\n?", "", cleaned)
+    return cleaned.strip()
+
+
+def _load_topics(workspace_id: str) -> str:
+    """Return the comma-separated topic string stored for this workspace, or ''."""
+    if not workspace_id:
+        return ""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute(
+            "SELECT value FROM user_preferences "
+            "WHERE workspace_id = ? AND preference_type = 'topic_preference' AND key = 'topics'",
+            (workspace_id,),
+        ).fetchone()
+        conn.close()
+        return row[0].strip() if row and row[0] else ""
+    except Exception:
+        return ""
+
+
 def generate_queries(task_title: str, task_text: str) -> list[str]:
     """Use the configured model to generate 3 focused search queries.
 
@@ -58,6 +101,17 @@ def generate_queries(task_title: str, task_text: str) -> list[str]:
         task_title: The bare task title — used as fallback query if the model fails.
         task_text:  Full context (title + description) — used as model input only.
     """
+    # Derive workspace_id from agent name: ws-abc123-scout → ws-abc123
+    ws_id = AGENT_NAME.rsplit("-", 1)[0] if "-" in AGENT_NAME else ""
+    topics = _load_topics(ws_id)
+    topic_guidance = (
+        f"Focus research on these topics: {topics}\n" if topics else ""
+    )
+
+    # Strip workspace metadata (source preferences, platform instructions, etc.)
+    # before sending to the model — domain names must not influence query topics.
+    clean_task_text = _strip_metadata_sections(task_text)
+
     prompt = (
         "Generate exactly 3 short web search queries (one per line, no numbering, "
         "no extra text) for this research task. "
@@ -65,7 +119,8 @@ def generate_queries(task_title: str, task_text: str) -> list[str]:
         "Use plain keyword queries only. "
         "Prioritize sources from the last 2 weeks. "
         "Accept sources up to 6 months old only if highly relevant. Add '2026' or "
-        "'March 2026' to at least one query to bias toward recent results.\n" + task_text
+        "'March 2026' to at least one query to bias toward recent results.\n"
+        f"{topic_guidance}{clean_task_text}"
     )
     # Fallback: use the bare task title — always a clean, searchable query.
     # Never fall back to task_text: descriptions include workspace metadata

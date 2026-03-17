@@ -1,0 +1,4 @@
+- Prefer a short, high-signal briefing over a long chronology dump.
+- Highlight changes that affect messaging, pricing, or product strategy first.
+- Flag uncertainty clearly when evidence is partial or conflicting.
+- Keep the weekly briefing scannable for an operator reading on a phone.

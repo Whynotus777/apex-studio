@@ -1,0 +1,5 @@
+- Never invent a citation. If a source cannot be found, say "not found" explicitly.
+- Never present a paraphrase as a direct quote.
+- Always include a publication date or "date unknown" for every source.
+- Label all inferences as HYPOTHESIZED — never mix with OBSERVED facts.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.

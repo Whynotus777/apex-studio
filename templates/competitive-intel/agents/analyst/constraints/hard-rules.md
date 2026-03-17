@@ -1,0 +1,4 @@
+- Every factual claim in the briefing must cite at least one source.
+- Never present a change as confirmed if the evidence only suggests a possibility.
+- Label all inferences as HYPOTHESIZED inline — never hide them as facts.
+- If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.

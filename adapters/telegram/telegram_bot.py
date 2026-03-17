@@ -842,12 +842,14 @@ async def workspaces_command(update: Update, context: Any) -> None:
 
     lines = ["🗂️ *Workspaces*\n"]
     for workspace in workspaces:
-        ws_detail = kernel.get_workspace(workspace["id"])
+        ws_id = workspace["id"]
+        ws_detail = kernel.get_workspace(ws_id)
         active = sum(1 for a in ws_detail.get("agents", []) if a["status"] == "active")
+        friendly = prefs_store.get_workspace_name(ws_id)
+        id_line = f"`{ws_id}`" + (f" *({friendly})*" if friendly else "")
         lines.append(
-            f"*{workspace['id']}* — {workspace.get('name', workspace['id'])}\n"
-            f"    Template: {workspace.get('template_id', 'unknown')} | Status: {workspace.get('status', 'unknown')}\n"
-            f"    Agents: {workspace.get('agent_count', 0)} | Active: {active}"
+            f"{id_line} — {workspace.get('template_id', 'unknown')}\n"
+            f"    Status: {workspace.get('status', 'unknown')} | Agents: {workspace.get('agent_count', 0)} | Active: {active}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -996,7 +998,12 @@ async def _run_content_engine_chain(
     # ── Load workspace preferences ──────────────────────────────────────────
     pref_sources = prefs_store.get_sources(workspace_id)
     pref_platform = prefs_store.get_platform(workspace_id)
-    pref_voice_samples = prefs_store.get_voice_samples(workspace_id)
+    # Pull voice samples for the workspace's configured platform only.
+    # Samples are now tagged by platform so Writer gets the right tone reference.
+    pref_voice_samples = (
+        prefs_store.get_voice_samples(workspace_id, pref_platform)
+        if pref_platform else []
+    )
 
     # ── Step 1: Scout (inject source preferences into task description) ─────
     # List domain names only — no site: operators. DuckDuckGo's HTML search
@@ -1418,14 +1425,18 @@ async def task_command(update: Update, context: Any) -> None:
         )
         return
 
-    workspace_id = args[0]
+    workspace_id = prefs_store.resolve_workspace_id(args[0])
     mission = " ".join(args[1:])
 
     # Validate workspace
     try:
         ws = kernel.get_workspace(workspace_id)
     except ValueError:
-        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"Workspace `{args[0]}` not found.\n"
+            "Use `/workspaces` to see available workspace IDs and names.",
+            parse_mode="Markdown",
+        )
         return
 
     if ws.get("status") == "deleted":
@@ -1675,9 +1686,12 @@ async def preferences_command(update: Update, context: Any) -> None:
         # Show current sources
         sources = prefs_store.get_sources(workspace_id)
         platform = prefs_store.get_platform(workspace_id)
-        voice_count = len(prefs_store.get_voice_samples(workspace_id))
+        voice_counts = prefs_store.get_voice_sample_counts(workspace_id)
         is_default = sources == list(DEFAULT_SOURCES)
         source_label = "_(defaults)_" if is_default else ""
+        voice_lines = [
+            f"  • {p}: {c}/10" for p, c in voice_counts.items() if c > 0
+        ] or ["  _(none stored)_"]
         lines = [
             f"⚙️ *Preferences for* `{workspace_id}`",
             "",
@@ -1685,40 +1699,45 @@ async def preferences_command(update: Update, context: Any) -> None:
         ] + [f"  • {s}" for s in sources] + [
             "",
             f"🎯 *Platform:* {platform or '_(not set)_'}",
-            f"🗣️ *Voice samples:* {voice_count}/10",
+            "🗣️ *Voice samples:*",
+        ] + voice_lines + [
             "",
             "Commands:",
             "  `/preferences <ws> add <domain> [domain2 ...]`",
             "  `/preferences <ws> remove <domain> [domain2 ...]`",
             "  `/preferences <ws> reset`",
             "  `/platform <ws> <linkedin|x|tiktok|instagram>`",
-            "  `/voice <ws> <post text>`",
+            "  `/voice <ws> <platform> <post text>`",
         ]
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def voice_command(update: Update, context: Any) -> None:
     """
-    /voice <workspace_id> [clear]
-    /voice <workspace_id> <post text>
+    /voice <workspace_id>                          — show sample counts per platform
+    /voice <workspace_id> <platform> <post text>  — add a voice sample for platform
+    /voice <workspace_id> clear <platform>         — clear all samples for platform
 
-    Manage voice samples used to guide Writer tone and style.
-    Max 10 samples. Each call to /voice <ws> <text> adds one sample.
-    /voice <ws> clear — removes all samples.
+    Platforms: linkedin, x, tiktok, instagram
+    Max 10 samples per platform. Writer receives samples for the workspace's
+    configured platform on every content task.
     """
     if not is_authorized(update.effective_chat.id):
         return
 
-    # Parse raw text to preserve newlines in multi-line posts
+    # Split into at most 4 parts: /voice  <ws>  <platform|clear>  <rest>
+    # Capping at 3 splits preserves newlines inside the post text.
     raw = update.message.text or ""
-    raw_parts = raw.split(None, 2)  # ["/voice", "<ws>", "<post text with newlines>"]
+    raw_parts = raw.split(None, 3)
 
     if len(raw_parts) < 2:
         await update.message.reply_text(
             "Usage:\n"
-            "  /voice <ws> <post text> — add a voice sample\n"
-            "  /voice <ws> clear — remove all samples\n"
-            "  /voice <ws> — show current samples"
+            "  `/voice <ws>` — show sample counts per platform\n"
+            "  `/voice <ws> <platform> <post text>` — add a sample\n"
+            "  `/voice <ws> clear <platform>` — clear samples for a platform\n\n"
+            "Platforms: `linkedin` `x` `tiktok` `instagram`",
+            parse_mode="Markdown",
         )
         return
 
@@ -1731,37 +1750,70 @@ async def voice_command(update: Update, context: Any) -> None:
         await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
         return
 
-    post_text = raw_parts[2].strip() if len(raw_parts) > 2 else ""
-
-    if post_text.lower() == "clear":
-        n = prefs_store.clear_voice_samples(workspace_id)
-        await update.message.reply_text(f"🗑️ Cleared {n} voice sample(s).")
-        return
-
-    if not post_text:
-        # Show current samples
-        samples = prefs_store.get_voice_samples(workspace_id)
-        if not samples:
-            await update.message.reply_text(
-                f"No voice samples stored for `{workspace_id}`.\n\n"
-                "Add one with:\n`/voice <ws> <your best post text>`",
-                parse_mode="Markdown",
-            )
-            return
-        lines = [f"🗣️ *Voice samples for* `{workspace_id}` ({len(samples)}/10)\n"]
-        for i, s in enumerate(samples, 1):
-            lines.append(f"*{i}.* {_summarise(s, 120)}")
-        lines.append("\n`/voice <ws> clear` to reset all samples.")
+    # ── /voice <ws>  — status view ───────────────────────────────────────────
+    if len(raw_parts) == 2:
+        counts = prefs_store.get_voice_sample_counts(workspace_id)
+        active_platform = prefs_store.get_platform(workspace_id)
+        lines = [f"🗣️ *Voice samples for* `{workspace_id}`\n"]
+        for p, c in counts.items():
+            marker = " ← active" if p == active_platform else ""
+            lines.append(f"  • *{p}:* {c}/10{marker}")
+        lines.append(
+            "\n`/voice <ws> <platform> <post text>` to add a sample\n"
+            "`/voice <ws> clear <platform>` to clear a platform"
+        )
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         return
 
-    # Add the sample
-    try:
-        count = prefs_store.add_voice_sample(workspace_id, post_text)
+    third = raw_parts[2].strip()
+
+    # ── /voice <ws> clear <platform> ────────────────────────────────────────
+    if third.lower() == "clear":
+        if len(raw_parts) < 4 or not raw_parts[3].strip():
+            await update.message.reply_text(
+                "Specify a platform to clear:\n"
+                "`/voice <ws> clear <linkedin|x|tiktok|instagram>`",
+                parse_mode="Markdown",
+            )
+            return
+        platform = raw_parts[3].strip().lower()
+        if platform not in VALID_PLATFORMS:
+            await update.message.reply_text(
+                f"Unknown platform `{platform}`. Use: `linkedin` `x` `tiktok` `instagram`",
+                parse_mode="Markdown",
+            )
+            return
+        n = prefs_store.clear_voice_samples(workspace_id, platform)
         await update.message.reply_text(
-            f"✅ Voice sample {count}/10 saved.\n\n"
+            f"🗑️ Cleared {n} voice sample(s) for *{platform}*.", parse_mode="Markdown"
+        )
+        return
+
+    # ── /voice <ws> <platform> <post text> ──────────────────────────────────
+    platform = third.lower()
+    if platform not in VALID_PLATFORMS:
+        await update.message.reply_text(
+            f"Unknown platform `{platform}`.\n\n"
+            "Usage: `/voice <ws> <linkedin|x|tiktok|instagram> <post text>`",
+            parse_mode="Markdown",
+        )
+        return
+
+    if len(raw_parts) < 4 or not raw_parts[3].strip():
+        await update.message.reply_text(
+            f"Provide the post text after the platform:\n"
+            f"`/voice {workspace_id} {platform} <your post here>`",
+            parse_mode="Markdown",
+        )
+        return
+
+    post_text = raw_parts[3].strip()
+    try:
+        count = prefs_store.add_voice_sample(workspace_id, platform, post_text)
+        await update.message.reply_text(
+            f"✅ *{platform}* voice sample {count}/10 saved.\n\n"
             f"_Preview: {_summarise(post_text, 100)}_\n\n"
-            "Writer will match this tone on next task.",
+            "Writer will match this tone for all future tasks on this platform.",
             parse_mode="Markdown",
         )
     except ValueError as exc:
@@ -1828,6 +1880,80 @@ async def platform_command(update: Update, context: Any) -> None:
     )
 
 
+async def topics_command(update: Update, context: Any) -> None:
+    """
+    /topics <workspace_id> <topic1>, <topic2>, ...
+    /topics <workspace_id> — show current topics
+
+    Sets the research focus for Scout's search queries in this workspace.
+    Topics are injected into query generation so Scout stays on-theme.
+
+    Example:
+      /topics ws-abc ai agents, agentic infrastructure, robotics, economics
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+
+    # Reconstruct raw text so commas in topics survive Telegram's arg splitting.
+    raw = update.message.text or ""
+    # Strip the command prefix (/topics or /topics@botname)
+    parts = raw.split(None, 2)  # ["/topics", "<ws-id>", "<rest>"]
+
+    if len(parts) < 2:
+        await update.message.reply_text(
+            "Usage:\n"
+            "  `/topics <ws>` — show current topics\n"
+            "  `/topics <ws> <topic1>, <topic2>, ...` — set topics\n\n"
+            "Example:\n"
+            "  `/topics ws-abc ai agents, agentic infrastructure, robotics`",
+            parse_mode="Markdown",
+        )
+        return
+
+    workspace_id = parts[1].strip()
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except ValueError:
+        await update.message.reply_text(f"Workspace `{workspace_id}` not found.", parse_mode="Markdown")
+        return
+
+    # Show mode — no topics argument
+    if len(parts) < 3 or not parts[2].strip():
+        stored = prefs_store.get_pref(workspace_id, "topic_preference", "topics")
+        if stored:
+            topics = [t.strip() for t in stored.split(",") if t.strip()]
+            lines = [f"🎯 *Research topics for* `{workspace_id}`\n"]
+            lines.extend(f"• {t}" for t in topics)
+            lines.append("\nUpdate: `/topics <ws> <topic1>, <topic2>, ...`")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                f"No topics set for `{workspace_id}`.\n\n"
+                "Scout will search based on task descriptions only.\n\n"
+                "Set topics with:\n"
+                "`/topics <ws> ai agents, agentic infrastructure, robotics`",
+                parse_mode="Markdown",
+            )
+        return
+
+    # Set mode — parse and store comma-separated topics
+    raw_topics = parts[2].strip()
+    topics = [t.strip() for t in raw_topics.split(",") if t.strip()]
+    if not topics:
+        await update.message.reply_text("No valid topics found. Separate topics with commas.")
+        return
+
+    # Store as a single comma-separated value under key "topics"
+    prefs_store.set_pref(workspace_id, "topic_preference", "topics", ", ".join(topics))
+
+    lines = [f"✅ *Research topics set for* `{workspace_id}`\n"]
+    lines.extend(f"• {t}" for t in topics)
+    lines.append("\nScout will focus queries on these topics from the next spawn.")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def xcreds_command(update: Update, context: Any) -> None:
     """
     /xcreds <workspace_id> <api_key> <api_secret> <access_token> <access_secret>
@@ -1886,6 +2012,72 @@ async def xcreds_command(update: Update, context: Any) -> None:
     await update.message.reply_text(
         f"✅ X credentials saved for `{workspace_id}`.\n"
         "Approved drafts with platform=x will now auto-publish.",
+        parse_mode="Markdown",
+    )
+
+
+async def name_command(update: Update, context: Any) -> None:
+    """
+    /name <workspace_id> <friendly-name>
+    /name <workspace_id> — show current name
+
+    Assigns a human-readable name to a workspace so you can use it in other
+    commands instead of the raw ws-xxxxxxxx ID.
+
+    Example:
+      /name ws-47b67aad My LinkedIn Content
+      /task "My LinkedIn Content" Research AI trends
+    """
+    if not is_authorized(update.effective_chat.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "  `/name <ws_id> <friendly-name>` — set a name\n"
+            "  `/name <ws_id>` — show current name",
+            parse_mode="Markdown",
+        )
+        return
+
+    workspace_id = args[0]
+
+    # Validate the workspace exists
+    try:
+        ws = kernel.get_workspace(workspace_id)
+        if ws.get("status") == "deleted":
+            raise ValueError("deleted")
+    except (ValueError, Exception):
+        await update.message.reply_text(
+            f"Workspace `{workspace_id}` not found.", parse_mode="Markdown"
+        )
+        return
+
+    if len(args) == 1:
+        # Show current name
+        current = prefs_store.get_workspace_name(workspace_id)
+        if current:
+            await update.message.reply_text(
+                f"🏷️ `{workspace_id}` is named *{current}*", parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"`{workspace_id}` has no friendly name yet.\n"
+                f"Set one with: `/name {workspace_id} My Name`",
+                parse_mode="Markdown",
+            )
+        return
+
+    friendly_name = " ".join(args[1:]).strip()
+    if not friendly_name:
+        await update.message.reply_text("Name cannot be empty.")
+        return
+
+    prefs_store.set_workspace_name(workspace_id, friendly_name)
+    await update.message.reply_text(
+        f"✅ `{workspace_id}` is now named *{friendly_name}*\n\n"
+        f"You can use the name instead of the ID:\n"
+        f"`/task {friendly_name} <mission>`",
         parse_mode="Markdown",
     )
 
@@ -2265,7 +2457,9 @@ def main() -> None:
     app.add_handler(CommandHandler("preferences", preferences_command))
     app.add_handler(CommandHandler("voice", voice_command))
     app.add_handler(CommandHandler("platform", platform_command))
+    app.add_handler(CommandHandler("topics", topics_command))
     app.add_handler(CommandHandler("xcreds", xcreds_command))
+    app.add_handler(CommandHandler("name", name_command))
     app.add_handler(CommandHandler("connect", connect_command))
     app.add_handler(CommandHandler("digest", digest_command))
     app.add_handler(CommandHandler("published", published_command))

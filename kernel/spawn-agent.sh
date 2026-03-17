@@ -67,7 +67,7 @@ ROLE=$(get_json_field "role")
 DESC=$(get_json_field "description")
 
 cat > "$TMP_DIR/system_prompt.txt" << SYSEOF
-You are $AGENT_NAME, the $ROLE agent in APEX venture studio.
+You are a $ROLE agent.
 Job: $DESC
 
 Hard rules:

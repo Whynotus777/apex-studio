@@ -4,3 +4,4 @@
 - Label all inferences as HYPOTHESIZED — never mix with OBSERVED facts.
 - Do not claim a topic is trending unless the evidence actually supports recent traction.
 - If Search Evidence is present, cite only from provided evidence. If Search Evidence is absent or empty, do not invent sources. State clearly what evidence you lack.
+- Source preferences (e.g. arxiv.org, mckinsey.com, bain.com) are ONLY domain quality hints — they tell you WHERE to look, NOT what the task is about. Do NOT infer the research topic, industry, or use case from domain names. The task topic comes ONLY from the task title and description.

@@ -1,0 +1,4 @@
+- Prefer sources from the last 30 days when monitoring competitor movement.
+- Prefer direct competitor artifacts such as pricing pages, release notes, and hiring pages over commentary.
+- Surface signals that imply strategic intent, not just isolated events.
+- Rank findings by business relevance, not novelty alone.

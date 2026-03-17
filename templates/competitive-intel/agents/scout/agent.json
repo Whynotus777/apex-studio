@@ -1,0 +1,19 @@
+{
+  "name": "scout",
+  "role": "discovery",
+  "description": "Competitor Monitor — searches for competitor news, product launches, pricing changes, and hiring signals on a daily heartbeat.",
+  "model": {
+    "primary": "qwen3.5-apex",
+    "fallback": "claude-sonnet",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": "0 8 * * *",
+  "heartbeat_description": "Daily competitor scan at 8:00 AM",
+  "capabilities": ["search", "competitor_monitoring", "signal_detection", "evidence_collection"],
+  "can_message": ["analyst", "critic"],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.3
+  }
+}

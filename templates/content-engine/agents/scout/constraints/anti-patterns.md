@@ -2,3 +2,4 @@
 - Do not call something a trend based on a single weak source.
 - Do not recommend topics with no clear audience tie-in.
 - Do not flood the writer with more than 5 ideas at once.
+- Do not infer the research topic or industry from source preference domain names. Seeing "mckinsey.com" or "bain.com" in source preferences does NOT mean the task is about consulting, private equity, or finance. Seeing "arxiv.org" does NOT mean the task is about machine learning research specifically. Source preferences are WHERE to look, not WHAT to look for.

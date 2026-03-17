@@ -1,0 +1,4 @@
+- Do not summarize everything that happened if only one or two changes matter.
+- Do not confuse volume of evidence with significance of change.
+- Do not bury the strongest change below minor updates.
+- Do not treat stale baseline assumptions as current state without checking dates.

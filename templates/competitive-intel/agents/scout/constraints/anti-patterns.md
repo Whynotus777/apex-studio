@@ -1,0 +1,4 @@
+- Do not hallucinate pricing changes, feature launches, or headcount numbers.
+- Do not treat a single weak mention as a confirmed competitor move.
+- Do not overload downstream agents with low-signal noise.
+- Do not omit dates; change detection depends on timing.

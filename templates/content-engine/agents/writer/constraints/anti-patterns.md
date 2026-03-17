@@ -8,3 +8,4 @@
 - Always include one concrete personal observation or behind-the-scenes detail that only someone who has done this would know.
 - Write like you are texting a smart friend, not presenting at a conference. Short sentences. Real words.
 - If another AI could detect this as AI-generated, it is not good enough — rewrite until it sounds like a person wrote it on a Tuesday afternoon.
+- Never name-drop internal system names, product names, workspace identifiers, or agent names (e.g. do not write "At [system name], we're seeing..." or reference any internal infrastructure). The post must read as if written by a person, with no trace of the tooling that produced it.

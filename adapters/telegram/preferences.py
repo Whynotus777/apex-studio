@@ -153,22 +153,33 @@ class UserPreferencesStore:
     def reset_sources(self, workspace_id: str) -> None:
         self.clear_prefs(workspace_id, "preferred_source")
 
-    def get_voice_samples(self, workspace_id: str) -> list[str]:
-        """Return stored voice sample texts (up to 10)."""
-        prefs = self.get_all_prefs(workspace_id, "voice_sample")
+    def get_voice_samples(self, workspace_id: str, platform: str) -> list[str]:
+        """Return stored voice sample texts for a platform (up to 10)."""
+        pref_type = f"voice_sample:{platform.lower().strip()}"
+        prefs = self.get_all_prefs(workspace_id, pref_type)
         return [str(p["value"]) for p in prefs[:10]]
 
-    def add_voice_sample(self, workspace_id: str, text: str) -> int:
-        """Add a voice sample. Returns current count. Raises if already at 10."""
-        existing = self.get_all_prefs(workspace_id, "voice_sample")
+    def add_voice_sample(self, workspace_id: str, platform: str, text: str) -> int:
+        """Add a voice sample tagged to a platform. Returns current count. Raises if at 10."""
+        pref_type = f"voice_sample:{platform.lower().strip()}"
+        existing = self.get_all_prefs(workspace_id, pref_type)
         if len(existing) >= 10:
-            raise ValueError("Maximum 10 voice samples reached. Remove one first.")
+            raise ValueError(f"Maximum 10 voice samples reached for {platform}. Clear some first.")
         key = f"sample_{len(existing) + 1}"
-        self.set_pref(workspace_id, "voice_sample", key, text)
+        self.set_pref(workspace_id, pref_type, key, text)
         return len(existing) + 1
 
-    def clear_voice_samples(self, workspace_id: str) -> int:
-        return self.clear_prefs(workspace_id, "voice_sample")
+    def clear_voice_samples(self, workspace_id: str, platform: str) -> int:
+        """Clear all voice samples for a specific platform."""
+        pref_type = f"voice_sample:{platform.lower().strip()}"
+        return self.clear_prefs(workspace_id, pref_type)
+
+    def get_voice_sample_counts(self, workspace_id: str) -> dict[str, int]:
+        """Return {platform: count} for all valid platforms."""
+        return {
+            p: len(self.get_all_prefs(workspace_id, f"voice_sample:{p}"))
+            for p in sorted(VALID_PLATFORMS)
+        }
 
     def get_platform(self, workspace_id: str) -> str | None:
         """Return the target platform string (e.g. 'linkedin') or None."""
@@ -209,3 +220,34 @@ class UserPreferencesStore:
     def clear_x_credentials(self, workspace_id: str) -> None:
         """Remove stored X credentials for this workspace."""
         self.clear_prefs(workspace_id, "x_credentials")
+
+    # ── Workspace friendly names ─────────────────────────────────────────────
+
+    # Stored under a fixed sentinel workspace_id so lookups are global.
+    _WS_NAMES_SCOPE = "__workspace_names__"
+
+    def set_workspace_name(self, workspace_id: str, name: str) -> None:
+        """Store a human-friendly name for a workspace ID."""
+        # Forward: ws-id → name
+        self.set_pref(self._WS_NAMES_SCOPE, "ws_name", workspace_id, name)
+        # Reverse: normalised-name → ws-id (for lookup by name in /task)
+        self.set_pref(self._WS_NAMES_SCOPE, "ws_id_by_name", name.lower().strip(), workspace_id)
+
+    def get_workspace_name(self, workspace_id: str) -> str | None:
+        """Return the friendly name for a workspace ID, or None."""
+        val = self.get_pref(self._WS_NAMES_SCOPE, "ws_name", workspace_id)
+        return str(val) if val else None
+
+    def resolve_workspace_id(self, name_or_id: str) -> str:
+        """
+        Given either a workspace ID (ws-...) or a friendly name, return the
+        canonical workspace ID.  Returns the input unchanged if it looks like
+        a raw ID or if no matching name is found.
+        """
+        candidate = name_or_id.strip()
+        # Already looks like a raw ID
+        if candidate.startswith("ws-"):
+            return candidate
+        # Try case-insensitive name → id lookup
+        val = self.get_pref(self._WS_NAMES_SCOPE, "ws_id_by_name", candidate.lower())
+        return str(val) if val else candidate

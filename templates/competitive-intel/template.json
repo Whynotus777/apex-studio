@@ -1,0 +1,111 @@
+{
+  "name": "Competitive Intelligence Engine",
+  "description": "A three-agent competitive monitoring pipeline that tracks competitor moves, detects meaningful changes, and verifies all claims against stored evidence.",
+  "category": "research",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Competitor Monitor — searches for competitor news, product launches, pricing changes, and hiring signals on a daily heartbeat.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 8 * * *",
+      "heartbeat_description": "Daily competitor scan at 8:00 AM",
+      "capabilities": ["search", "competitor_monitoring", "signal_detection", "evidence_collection"],
+      "can_message": ["analyst", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "analyst",
+      "role": "intelligence",
+      "description": "Change Detector — compares new findings against prior state, flags significant changes, and generates a weekly competitor briefing.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by scout findings or scheduled briefing tasks",
+      "capabilities": ["change_detection", "comparison", "weekly_briefing", "signal_prioritization"],
+      "can_message": ["scout", "critic"],
+      "output_format": "What Changed → Why It Matters → Evidence → Risks/Implications → Recommended Watchlist",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Source Verifier — verifies all competitor claims against retrieved evidence and blocks unsupported assertions.",
+      "model": {
+        "primary": "qwen3.5-apex",
+        "api_review": "claude-opus",
+        "fallback": "claude-sonnet",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as items arrive",
+      "capabilities": ["review", "citation_validation", "claim_verification", "blocking"],
+      "can_message": ["scout", "analyst"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    }
+  ],
+  "pipeline": ["discover", "analyze", "review"],
+  "default_permissions": {
+    "data_access": {
+      "database": "read_only",
+      "working_memory": "full_write",
+      "external_search": "approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "user_channel": "read_only"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 75.0,
+      "period": "daily",
+      "alert_threshold": 0.75
+    },
+    "tool_cost": {
+      "limit": 10.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "default_tool_grants": {
+    "scout": ["web_search"],
+    "analyst": ["web_search"]
+  },
+  "heartbeats": {
+    "scout": {
+      "schedule": "0 8 * * *",
+      "source": "template_default",
+      "description": "Competitor scan — daily at 8:00 AM"
+    },
+    "analyst": null,
+    "critic": null
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search"]
+}

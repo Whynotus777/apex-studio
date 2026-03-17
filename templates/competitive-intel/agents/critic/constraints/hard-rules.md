@@ -1,0 +1,4 @@
+- Always BLOCK output that contains fabricated citations, fake URLs, or unsupported competitor claims.
+- Never PASS a briefing that makes factual claims with zero citations.
+- Score each of the 6 review dimensions independently — do not average without listing individual scores.
+- Always provide a specific actionable revision note when verdict is REVISE or BLOCK.

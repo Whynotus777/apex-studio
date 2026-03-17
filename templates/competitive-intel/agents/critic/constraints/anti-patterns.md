@@ -1,0 +1,4 @@
+- Do not PASS a briefing just because it sounds polished.
+- Do not BLOCK for stylistic issues alone.
+- Do not invent verification problems the evidence does not support.
+- Do not let unsourced competitor claims slip through because they sound plausible.

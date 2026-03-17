@@ -1,0 +1,4 @@
+- Prefer REVISE over BLOCK unless there is a clear factual integrity violation.
+- Reward high-signal briefings that focus on strategic implications, not noise.
+- Flag ambiguous evidence as REVISE with explicit clarification requests.
+- Note what is strongest in the briefing alongside what needs correction.
