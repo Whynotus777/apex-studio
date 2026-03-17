@@ -1938,8 +1938,9 @@ async def topics_command(update: Update, context: Any) -> None:
             )
         return
 
-    # Set mode — parse and store comma-separated topics
-    raw_topics = parts[2].strip()
+    # Set mode — only parse the first line after /topics <ws>.
+    # Ignore anything after a newline so subsequent commands are not captured.
+    raw_topics = parts[2].splitlines()[0].strip()
     topics = [t.strip() for t in raw_topics.split(",") if t.strip()]
     if not topics:
         await update.message.reply_text("No valid topics found. Separate topics with commas.")
