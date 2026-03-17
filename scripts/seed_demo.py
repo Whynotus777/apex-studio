@@ -35,6 +35,452 @@ def _row_exists(conn: sqlite3.Connection, table: str, where: str, params: tuple)
     return conn.execute(f"SELECT 1 FROM {table} WHERE {where}", params).fetchone() is not None
 
 
+def seed_investor_team(conn: sqlite3.Connection, counts: dict[str, int]) -> None:
+    """Seed a full investor-research demo team. Idempotent via fixed ids."""
+    old_workspace_ids = ("ws-demo-investor", "ws-demo-investors")
+    old_task_patterns = ("task-demo-investor-%", "task-demo-investors-%")
+    old_agent_patterns = ("ws-demo-investor-%", "ws-demo-investors-%")
+
+    conn.execute(
+        f"DELETE FROM agent_messages WHERE workspace_id IN ({','.join('?' for _ in old_workspace_ids)}) "
+        f"OR task_id LIKE ? OR task_id LIKE ?",
+        (*old_workspace_ids, *old_task_patterns),
+    )
+    conn.execute(
+        f"DELETE FROM evals WHERE workspace_id IN ({','.join('?' for _ in old_workspace_ids)}) "
+        f"OR task_id LIKE ? OR task_id LIKE ?",
+        (*old_workspace_ids, *old_task_patterns),
+    )
+    conn.execute(
+        f"DELETE FROM reviews WHERE workspace_id IN ({','.join('?' for _ in old_workspace_ids)}) "
+        f"OR task_id LIKE ? OR task_id LIKE ?",
+        (*old_workspace_ids, *old_task_patterns),
+    )
+    conn.execute(
+        "DELETE FROM agent_sessions WHERE task_id LIKE ? OR task_id LIKE ? "
+        "OR agent_name LIKE ? OR agent_name LIKE ?",
+        (*old_task_patterns, *old_agent_patterns),
+    )
+    conn.execute(
+        "DELETE FROM evidence WHERE task_id LIKE ? OR task_id LIKE ?",
+        old_task_patterns,
+    )
+    conn.execute(
+        "DELETE FROM tasks WHERE workspace_id IN (?, ?) OR id LIKE ? OR id LIKE ?",
+        (*old_workspace_ids, *old_task_patterns),
+    )
+    conn.execute(
+        "DELETE FROM agent_status WHERE workspace_id IN (?, ?) OR agent_name LIKE ? OR agent_name LIKE ?",
+        (*old_workspace_ids, *old_agent_patterns),
+    )
+    conn.execute(
+        "DELETE FROM user_preferences WHERE workspace_id IN (?, ?)",
+        old_workspace_ids,
+    )
+    conn.execute(
+        "DELETE FROM workspaces WHERE id IN (?, ?)",
+        old_workspace_ids,
+    )
+
+    workspace_id = "ws-demo-investors"
+    template_id = "investor-research"
+    conn.execute(
+        "INSERT OR REPLACE INTO workspaces (id, template_id, name, status) VALUES (?,?,?,'active')",
+        (workspace_id, template_id, "My Investor Research"),
+    )
+    counts["teams"] += 1
+
+    def _meta(template_agent: str) -> str:
+        return json.dumps({
+            "paused": False,
+            "config_path": str(APEX_HOME / f"templates/{template_id}/agents/{template_agent}/agent.json"),
+            "template_id": template_id,
+            "template_agent_name": template_agent,
+            "workspace_id": workspace_id,
+        })
+
+    agents = [
+        ("ws-demo-investors-scout", "idle", None, _meta("scout")),
+        ("ws-demo-investors-analyst", "idle", None, _meta("analyst")),
+        ("ws-demo-investors-strategist", "idle", None, _meta("strategist")),
+        ("ws-demo-investors-critic", "idle", None, _meta("critic")),
+    ]
+    for agent_name, status, current_task, meta in agents:
+        conn.execute(
+            """INSERT OR REPLACE INTO agent_status
+               (agent_name, status, current_task, last_heartbeat, workspace_id, meta)
+               VALUES (?, ?, ?, datetime('now'), ?, ?)""",
+            (agent_name, status, current_task, workspace_id, meta),
+        )
+
+    tasks = [
+        (
+            "task-demo-investors-001",
+            "Find seed investors for an AI agent platform",
+            "Identify seed-stage investors backing AI agent infrastructure, then enrich and prioritize the top matches.",
+            "done",
+            "approved",
+            "ws-demo-investors-strategist",
+            None,
+            "datetime('now', '-4 days -2 hours')",
+            "datetime('now', '-4 days -1 hour')",
+        ),
+        (
+            "task-demo-investors-002",
+            "Research Series A firms focused on developer tools",
+            "Find Series A funds investing in developer tools, rank the best fits, and package the research for approval.",
+            "review",
+            "critic_passed",
+            "ws-demo-investors-strategist",
+            None,
+            "datetime('now', '-9 hours')",
+            None,
+        ),
+    ]
+    for task_id, title, desc, status, review_status, assigned_to, checked_out_by, created_at, completed_at in tasks:
+        conn.execute(
+            f"""INSERT OR REPLACE INTO tasks
+               (id, workspace_id, goal_id, title, description, status, review_status,
+                assigned_to, checked_out_by, created_at, completed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,{created_at},{completed_at or 'NULL'})""",
+            (
+                task_id,
+                workspace_id,
+                "goal-demo-investor",
+                title,
+                desc,
+                status,
+                review_status,
+                assigned_to,
+                checked_out_by,
+            ),
+        )
+        counts["tasks"] += 1
+
+    evidence_rows = [
+        (
+            "ev-demo-investors-001-a",
+            "task-demo-investors-001",
+            "ws-demo-investors-scout",
+            "seed investors AI agent platform enterprise workflow automation 2026",
+            [
+                {
+                    "title": "OpenAI Startup Fund backs multi-agent workflow startup Relay",
+                    "url": "https://techcrunch.com/2026/02/openai-startup-fund-relay",
+                    "snippet": "Relay raised a seed round to build operational control planes for multi-agent business workflows.",
+                    "source": "techcrunch.com",
+                },
+                {
+                    "title": "Initialized Capital portfolio: AI infrastructure investments",
+                    "url": "https://initialized.com/portfolio",
+                    "snippet": "Initialized continues backing AI-native developer and infrastructure companies at seed.",
+                    "source": "initialized.com",
+                },
+                {
+                    "title": "Crunchbase: Felicis seed investments in AI workflow software",
+                    "url": "https://www.crunchbase.com/organization/felicis/company_financials",
+                    "snippet": "Felicis remains active in seed-stage AI workflow and infrastructure deals.",
+                    "source": "crunchbase.com",
+                },
+            ],
+        ),
+        (
+            "ev-demo-investors-001-b",
+            "task-demo-investors-001",
+            "ws-demo-investors-scout",
+            "seed funds agent infrastructure observability developer tools 2026",
+            [
+                {
+                    "title": "Theory Ventures thesis: AI-native enterprise software",
+                    "url": "https://theory.ventures/blog/ai-native-enterprise-software",
+                    "snippet": "Theory outlines its thesis for backing infrastructure-heavy AI software teams early.",
+                    "source": "theory.ventures",
+                },
+                {
+                    "title": "Costanoa on vertical AI workflow tools",
+                    "url": "https://costanoa.vc/vertical-ai-workflow-tools",
+                    "snippet": "Costanoa describes why workflow-native AI products are compelling at seed.",
+                    "source": "costanoa.vc",
+                },
+                {
+                    "title": "First Round review of agentic productivity startups",
+                    "url": "https://review.firstround.com/agentic-productivity-startups-2026",
+                    "snippet": "A survey of investors backing new systems of work built around agent orchestration.",
+                    "source": "review.firstround.com",
+                },
+            ],
+        ),
+        (
+            "ev-demo-investors-002-a",
+            "task-demo-investors-002",
+            "ws-demo-investors-scout",
+            "series a firms developer tools devops infrastructure 2026 partners portfolio",
+            [
+                {
+                    "title": "Index Ventures doubles down on developer tooling",
+                    "url": "https://sifted.eu/articles/index-ventures-developer-tools-2026",
+                    "snippet": "Index partners outline continued appetite for Series A developer tooling companies with clear workflow adoption.",
+                    "source": "sifted.eu",
+                },
+                {
+                    "title": "Bessemer developer platform investments",
+                    "url": "https://www.bvp.com/atlas/developer-platform",
+                    "snippet": "Bessemer tracks infrastructure and developer platform bets from seed through Series A.",
+                    "source": "bvp.com",
+                },
+                {
+                    "title": "Redpoint's thesis on AI developer tools",
+                    "url": "https://www.redpoint.com/blog/ai-developer-tools-series-a/",
+                    "snippet": "Redpoint explains what it looks for in emerging AI-native tools serving developers.",
+                    "source": "redpoint.com",
+                },
+                {
+                    "title": "Crunchbase: Accel portfolio in developer infrastructure",
+                    "url": "https://www.crunchbase.com/organization/accel/portfolio",
+                    "snippet": "Accel continues to show density in developer infrastructure and platform tooling.",
+                    "source": "crunchbase.com",
+                },
+            ],
+        ),
+    ]
+    for evidence_id, task_id, agent_id, query, results in evidence_rows:
+        conn.execute(
+            """INSERT OR REPLACE INTO evidence
+               (id, task_id, agent_id, tool_name, query, results)
+               VALUES (?,?,?,?,?,?)""",
+            (evidence_id, task_id, agent_id, "web_search", query, json.dumps(results)),
+        )
+        counts["evidence"] += 1
+
+    sessions = [
+        (
+            "sess-demo-investors-001-scout",
+            "ws-demo-investors-scout",
+            "task-demo-investors-001",
+            {
+                "actions_taken": "Found 12 potential seed investors active in AI agent infrastructure and workflow automation.",
+                "observations": "The best fits are investors already backing developer tooling, workflow systems, or AI infrastructure companies.",
+                "proposed_output": (
+                    "Investor longlist (12): Felicis, Initialized, Theory Ventures, Costanoa, First Round, Uncork, Redpoint, "
+                    "Bloomberg Beta, General Catalyst, Amplify, Haystack, and SV Angel."
+                ),
+                "messages": [{"to": "ws-demo-investors-analyst", "type": "research_handoff", "content": "Longlist ready. Enrich top matches with fund details and thesis fit."}],
+                "scratchpad_update": "Strongest early signals cluster around workflow software and observability-aware investors.",
+                "status": {"state": "done", "stakes": "medium"},
+            },
+            "complete",
+            "datetime('now', '-4 days -2 hours')",
+            "datetime('now', '-4 days -1 hour -50 minutes')",
+        ),
+        (
+            "sess-demo-investors-001-analyst",
+            "ws-demo-investors-analyst",
+            "task-demo-investors-001",
+            {
+                "actions_taken": "Enriched the top 8 investors and ranked them into Tier 1, Tier 2, and Tier 3 based on thesis fit and stage alignment.",
+                "observations": "Tier 1 investors have the clearest overlap with agent infrastructure, vertical workflow software, and seed check-size fit.",
+                "proposed_output": (
+                    "Tier 1 (3): Felicis, Theory Ventures, Costanoa. Tier 2 (3): Initialized, Redpoint, First Round. "
+                    "Tier 3 (2): Bloomberg Beta, Uncork. Each profile includes partner names, recent portfolio signals, and fit notes."
+                ),
+                "messages": [{"to": "ws-demo-investors-strategist", "type": "research_handoff", "content": "Tiering complete. Draft outreach angles for Tier 1 only."}],
+                "scratchpad_update": "Tier 1 investors want a clear wedge around trust infrastructure for autonomous workflows.",
+                "status": {"state": "done", "stakes": "medium"},
+            },
+            "complete",
+            "datetime('now', '-4 days -1 hour -40 minutes')",
+            "datetime('now', '-4 days -1 hour -25 minutes')",
+        ),
+        (
+            "sess-demo-investors-001-strategist",
+            "ws-demo-investors-strategist",
+            "task-demo-investors-001",
+            {
+                "actions_taken": "Prepared Tier 1 outreach angles and draft cold emails under 150 words.",
+                "observations": "The most credible angle is not generic AI hype; it is workflow trust, evidence grounding, and production reliability.",
+                "proposed_output": (
+                    "Felicis: angle around operational trust layer for AI workflows. Theory: wedge around control-plane infrastructure for agents. "
+                    "Costanoa: position as workflow-native AI product with defensible operator feedback loops.\n\n"
+                    "Draft email example to Theory Ventures:\n"
+                    "Subject: Trust infrastructure for AI agents\n"
+                    "Hi Tomasz — we've built an evidence-backed control layer for AI agent workflows so teams can automate safely without losing reviewability..."
+                ),
+                "messages": [{"to": "ws-demo-investors-critic", "type": "review_request", "content": "Seed investor package ready for final review."}],
+                "scratchpad_update": "Cold emails should stay thesis-linked and under 150 words.",
+                "status": {"state": "done", "stakes": "high"},
+            },
+            "complete",
+            "datetime('now', '-4 days -1 hour -15 minutes')",
+            "datetime('now', '-4 days -1 hour')",
+        ),
+        (
+            "sess-demo-investors-002-scout",
+            "ws-demo-investors-scout",
+            "task-demo-investors-002",
+            {
+                "actions_taken": "Found a shortlist of Series A funds actively investing in developer tools and platform infrastructure.",
+                "observations": "The market is favoring firms with repeated conviction in developer workflow tooling rather than horizontal AI wrappers.",
+                "proposed_output": "Developer-tools Series A investor shortlist assembled from 4 source-backed profiles.",
+                "messages": [{"to": "ws-demo-investors-analyst", "type": "research_handoff", "content": "Shortlist ready. Rank by relevance and thesis fit."}],
+                "scratchpad_update": "Prefer firms with recent developer-platform or DevOps investments.",
+                "status": {"state": "done", "stakes": "medium"},
+            },
+            "complete",
+            "datetime('now', '-9 hours')",
+            "datetime('now', '-8 hours -45 minutes')",
+        ),
+        (
+            "sess-demo-investors-002-analyst",
+            "ws-demo-investors-analyst",
+            "task-demo-investors-002",
+            {
+                "actions_taken": "Ranked Series A developer-tools investors by thesis fit, recent portfolio evidence, and likely partner relevance.",
+                "observations": "Index and Bessemer have the strongest direct fit; Redpoint and Accel are credible but slightly broader in mandate.",
+                "proposed_output": (
+                    "Ranked investor list:\n"
+                    "1. Index Ventures — Partner: Hannah Seal. Portfolio: Snyk, Linear, Persona. Thesis alignment: strong fit for workflow-native developer tools with fast adoption loops.\n"
+                    "2. Bessemer Venture Partners — Partner: Elliott Robinson. Portfolio: LaunchDarkly, HashiCorp, PagerDuty. Thesis alignment: clear appetite for developer platforms and infra abstraction.\n"
+                    "3. Redpoint — Partner: Tomasz Tunguz. Portfolio: Astronomer, LaunchDarkly. Thesis alignment: strong for tools improving software team throughput.\n"
+                    "4. Accel — Partner: Sameer Gandhi. Portfolio: BrowserStack, Sentry. Thesis alignment: relevant, but broader focus means lower specificity than Index/Bessemer."
+                ),
+                "messages": [{"to": "ws-demo-investors-strategist", "type": "research_handoff", "content": "Ranking complete. Package top firms with outreach notes."}],
+                "scratchpad_update": "Index and Bessemer should be first-touch firms for a devtools-focused Series A process.",
+                "status": {"state": "done", "stakes": "medium"},
+            },
+            "complete",
+            "datetime('now', '-8 hours -35 minutes')",
+            "datetime('now', '-8 hours -10 minutes')",
+        ),
+        (
+            "sess-demo-investors-002-strategist",
+            "ws-demo-investors-strategist",
+            "task-demo-investors-002",
+            {
+                "actions_taken": "Packaged the ranked investor list into an approval-ready memo with recommended outreach hooks.",
+                "observations": "The strongest pitch angle for this cohort is developer productivity leverage rather than raw AI capability.",
+                "proposed_output": (
+                    "Approval-ready investor package for Series A developer tools funds. Top outreach hooks emphasize developer workflow acceleration, "
+                    "defensible adoption inside engineering teams, and repeatable expansion from tool to system of record."
+                ),
+                "messages": [{"to": "ws-demo-investors-critic", "type": "review_request", "content": "Series A developer tools package ready for review."}],
+                "scratchpad_update": "Keep the approved package focused on fund fit and recent developer-tool portfolio signals.",
+                "status": {"state": "needs_review", "stakes": "medium"},
+            },
+            "complete",
+            "datetime('now', '-8 hours')",
+            "datetime('now', '-7 hours -50 minutes')",
+        ),
+    ]
+    for session_id, agent_name, task_id, payload, status, created_at, last_active in sessions:
+        conn.execute(
+            f"""INSERT OR REPLACE INTO agent_sessions
+               (id, agent_name, task_id, context, created_at, last_active, status)
+               VALUES (?,?,?,?,{created_at},{last_active},?)""",
+            (session_id, agent_name, task_id, json.dumps(payload), status),
+        )
+        counts["sessions"] += 1
+
+    reviews = [
+        (
+            2101,
+            "task-demo-investors-001",
+            "ws-demo-investors-critic",
+            "sess-demo-investors-001-strategist",
+            "high",
+            "PASS",
+            "approved",
+            {
+                "scores": {"accuracy": 4.5, "relevance": 4.0, "thesis_fit": 4.0, "recency": 3.5},
+                "overall_score": 4.0,
+                "verdict": "PASS",
+                "feedback": "Strong investor package with credible fund matching and usable Tier 1 outreach angles. Recency is solid but one fund-thesis reference should be refreshed before live outreach.",
+            },
+            "datetime('now', '-4 days -58 minutes')",
+            "datetime('now', '-4 days -55 minutes')",
+        ),
+        (
+            2102,
+            "task-demo-investors-002",
+            "ws-demo-investors-critic",
+            "sess-demo-investors-002-strategist",
+            "medium",
+            "PASS",
+            None,
+            {
+                "scores": {"accuracy": 4.0, "relevance": 4.5, "thesis_fit": 3.5, "recency": 4.0},
+                "overall_score": 4.0,
+                "verdict": "PASS",
+                "feedback": "Good Series A developer-tools targeting. Relevance is strong and the investor list is specific. Thesis-fit can improve by tightening one partner-level connection before approval.",
+            },
+            "datetime('now', '-7 hours -45 minutes')",
+            None,
+        ),
+    ]
+    for review_id, task_id, agent_name, output_ref, stakes, verdict, human_verdict, feedback, created_at, reviewed_at in reviews:
+        conn.execute(
+            f"""INSERT OR REPLACE INTO reviews
+               (id, task_id, agent_name, output_ref, stakes, verdict, feedback, workspace_id, created_at, reviewed_at)
+               VALUES (?,?,?,?,?,?,?,?,{created_at},{reviewed_at or 'NULL'})""",
+            (
+                review_id,
+                task_id,
+                agent_name,
+                output_ref,
+                stakes,
+                verdict,
+                json.dumps(feedback),
+                workspace_id,
+            ),
+        )
+        counts["reviews_total"] += 1
+        if human_verdict is None and verdict == "PASS":
+            counts["reviews_pending"] += 1
+
+    eval_rows = [
+        ("task-demo-investors-001", [("accuracy", 4.5), ("relevance", 4.0), ("thesis_fit", 4.0), ("recency", 3.5), ("overall", 4.0)]),
+        ("task-demo-investors-002", [("accuracy", 4.0), ("relevance", 4.5), ("thesis_fit", 3.5), ("recency", 4.0), ("overall", 4.0)]),
+    ]
+    for task_id, dimensions in eval_rows:
+        for dimension, score in dimensions:
+            conn.execute(
+                """INSERT INTO evals
+                   (task_id, agent_name, eval_layer, eval_type, dimension, score, max_score, workspace_id)
+                   VALUES (?, 'ws-demo-investors-critic', 'critic', 'dimension_score', ?, ?, 5.0, ?)""",
+                (task_id, dimension, score, workspace_id),
+            )
+            counts["evals"] += 1
+
+    messages = [
+        ("ws-demo-investors-scout", "ws-demo-investors-analyst", "research_handoff", "task-demo-investors-001", "Found 12 seed investors with recent deal evidence and fit notes.", "-4 days -1 hour -48 minutes"),
+        ("ws-demo-investors-analyst", "ws-demo-investors-strategist", "research_handoff", "task-demo-investors-001", "Top 8 enriched and tiered. Focus outreach on the Tier 1 three.", "-4 days -1 hour -22 minutes"),
+        ("ws-demo-investors-strategist", "ws-demo-investors-critic", "review_request", "task-demo-investors-001", "Seed investor package ready for approval-quality review.", "-4 days -59 minutes"),
+        ("ws-demo-investors-scout", "ws-demo-investors-analyst", "research_handoff", "task-demo-investors-002", "Series A developer-tools fund shortlist assembled from 4 fresh sources.", "-8 hours -42 minutes"),
+        ("ws-demo-investors-analyst", "ws-demo-investors-strategist", "research_handoff", "task-demo-investors-002", "Ranked list complete with partner and thesis notes.", "-8 hours -8 minutes"),
+        ("ws-demo-investors-strategist", "ws-demo-investors-critic", "review_request", "task-demo-investors-002", "Approval-ready developer-tools investor package ready for critic.", "-7 hours -49 minutes"),
+    ]
+    for from_agent, to_agent, msg_type, task_id, content, offset in messages:
+        conn.execute(
+            f"""INSERT INTO agent_messages
+               (from_agent, to_agent, msg_type, content, task_id, workspace_id, status, created_at)
+               VALUES (?,?,?,?,?,?,'read',datetime('now', ?))""",
+            (from_agent, to_agent, msg_type, content, task_id, workspace_id, offset),
+        )
+        counts["messages"] += 1
+
+    prefs = [
+        ("topic_preference", "topics", "AI infrastructure, developer tools, vertical SaaS"),
+        ("target_stage", "stage", "seed"),
+    ]
+    for preference_type, key, value in prefs:
+        conn.execute(
+            """INSERT OR REPLACE INTO user_preferences
+               (workspace_id, preference_type, key, value, updated_at)
+               VALUES (?,?,?,?,datetime('now'))""",
+            (workspace_id, preference_type, key, value),
+        )
+        counts["prefs"] += 1
+
+
 # ── Realistic content ─────────────────────────────────────────────────────────
 
 # Marketing task 1 — approved & published
@@ -540,7 +986,6 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
     workspaces = [
         ("ws-demo-marketing", "content-engine",   "My Marketing Team"),
         ("ws-demo-sales",     "sales-outreach",   "My Sales Team"),
-        ("ws-demo-investor",  "investor-research", "My Investor Team"),
     ]
     for wid, tid, name in workspaces:
         conn.execute(
@@ -586,19 +1031,6 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         ("ws-demo-sales-critic",        "ws-demo-sales",     "idle",   None,
          _meta("ws-demo-sales", "sales-outreach", "critic",
                "content-engine/agents/critic/agent.json")),
-        # Investor team — strategist is actively turning research into outreach
-        ("ws-demo-investor-scout",      "ws-demo-investor",  "idle",   None,
-         _meta("ws-demo-investor", "investor-research", "scout",
-               "investor-research/agents/scout/agent.json")),
-        ("ws-demo-investor-analyst",    "ws-demo-investor",  "idle",   None,
-         _meta("ws-demo-investor", "investor-research", "analyst",
-               "investor-research/agents/analyst/agent.json")),
-        ("ws-demo-investor-strategist", "ws-demo-investor",  "active", "task-demo-investor-001",
-         _meta("ws-demo-investor", "investor-research", "strategist",
-               "investor-research/agents/strategist/agent.json")),
-        ("ws-demo-investor-critic",     "ws-demo-investor",  "idle",   None,
-         _meta("ws-demo-investor", "investor-research", "critic",
-               "investor-research/agents/critic/agent.json")),
     ]
     for agent_name, ws_id, status, current_task, meta in agents:
         conn.execute(
@@ -659,16 +1091,6 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
          "ws-demo-sales-writer", None,
          "datetime('now', '-3 days -45 minutes')",
          None),
-
-        # Investor — analyst briefing in progress, scaffold for finance/research UI
-        ("task-demo-investor-001", "ws-demo-investor", "goal-demo-investor",
-         "Tier 1 AI infrastructure investor target package",
-         "Find active investors in AI infrastructure, enrich each fund with thesis and portfolio fit, "
-         "then draft a personalized outreach angle for the top matches.",
-         "in_progress", None,
-         "ws-demo-investor-strategist", "ws-demo-investor-strategist",
-         "datetime('now', '-4 hours -10 minutes')",
-         None),
     ]
     for (tid, ws, goal, title, desc, status, rev_status,
          assigned_to, checked_out_by, created_at, completed_at) in tasks:
@@ -692,108 +1114,8 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         )
         counts["evidence"] += 1
 
-    investor_evidence = [
-        (
-            "ev-demo-investor-a",
-            "task-demo-investor-001",
-            "ws-demo-investor-scout",
-            "AI infrastructure investors March 2026 enterprise agent infrastructure seed series A",
-            json.dumps([
-                {
-                    "title": "Felicis backs agent infrastructure startup TraceLayer",
-                    "url": "https://techcrunch.com/2026/03/tracelayer-series-a",
-                    "snippet": "TraceLayer's Series A was led by Felicis, highlighting continued investor appetite for infrastructure that manages production AI systems.",
-                    "source": "techcrunch.com",
-                },
-                {
-                    "title": "Index Ventures bets on enterprise orchestration for AI agents",
-                    "url": "https://sifted.eu/articles/index-ventures-ai-agent-orchestration-2026",
-                    "snippet": "Index is increasing conviction around control-plane and observability layers for enterprise agent deployments.",
-                    "source": "sifted.eu",
-                },
-                {
-                    "title": "Theory Ventures on why AI infra still has room for new winners",
-                    "url": "https://theory.ventures/blog/ai-infrastructure-2026",
-                    "snippet": "Theory Ventures outlines what it looks for in vertical infrastructure products serving the next wave of AI-native software.",
-                    "source": "theory.ventures",
-                },
-            ]),
-        ),
-    ]
-    for evidence_id, task_id, agent_id, query, results_json in investor_evidence:
-        conn.execute(
-            """INSERT OR REPLACE INTO evidence
-               (id, task_id, agent_id, tool_name, query, results)
-               VALUES (?, ?, ?, 'web_search', ?, ?)""",
-            (evidence_id, task_id, agent_id, query, results_json),
-        )
-        counts["evidence"] += 1
-
     # ── 6. Agent sessions (drafts) ────────────────────────────────────────────
     for s in _SESSIONS:
-        conn.execute(
-            f"""INSERT OR REPLACE INTO agent_sessions
-               (id, agent_name, task_id, context, created_at, last_active, status)
-               VALUES (?,?,?,?,{s['created_at']},{s['last_active']},?)""",
-            (s["id"], s["agent_name"], s["task_id"], s["context"], s["status"]),
-        )
-        counts["sessions"] += 1
-
-    investor_sessions = [
-        {
-            "id": "sess-demo-investor-scout",
-            "agent_name": "ws-demo-investor-scout",
-            "task_id": "task-demo-investor-001",
-            "context": json.dumps({
-                "actions_taken": "Built an initial list of active investors backing AI infrastructure and enterprise agent tooling.",
-                "observations": "The strongest recent activity is concentrated among firms already backing observability, infra control planes, and workflow software.",
-                "proposed_output": "Scout longlist complete. Passing candidate investors with recent deal evidence to Analyst.",
-                "messages": [{"to": "ws-demo-investor-analyst", "type": "request", "content": "Enrich these investors with fund details, thesis, and portfolio fit."}],
-                "scratchpad_update": "Prioritize investors already active in developer tooling, observability, and enterprise AI infrastructure.",
-                "status": {"state": "done", "stakes": "medium"},
-            }),
-            "status": "complete",
-            "created_at": "datetime('now', '-4 hours -12 minutes')",
-            "last_active": "datetime('now', '-4 hours -11 minutes')",
-        },
-        {
-            "id": "sess-demo-investor-analyst",
-            "agent_name": "ws-demo-investor-analyst",
-            "task_id": "task-demo-investor-001",
-            "context": json.dumps({
-                "actions_taken": "Researched fund size, stage fit, thesis alignment, and closest portfolio comps for the highest-signal investors from Scout.",
-                "observations": "Felicis, Index, and Theory Ventures all show credible fit for an AI infrastructure raise, but with different positioning angles.",
-                "proposed_output": (
-                    "Tier 1 shortlist: Felicis for workflow software appetite, Index for enterprise orchestration angle, Theory for infra conviction and founder resonance."
-                ),
-                "messages": [{"to": "ws-demo-investor-strategist", "type": "handoff", "content": "Top investor shortlist ready. Draft personalized outreach angles and cold emails."}],
-                "scratchpad_update": "Portfolio comp angle is strongest for Index; infra wedge is strongest for Theory.",
-                "status": {"state": "done", "stakes": "medium"},
-            }),
-            "status": "complete",
-            "created_at": "datetime('now', '-4 hours -5 minutes')",
-            "last_active": "datetime('now', '-3 hours -58 minutes')",
-        },
-        {
-            "id": "sess-demo-investor-strategist",
-            "agent_name": "ws-demo-investor-strategist",
-            "task_id": "task-demo-investor-001",
-            "context": json.dumps({
-                "actions_taken": "Drafting tailored outreach angles for the Tier 1 investor shortlist.",
-                "observations": "Best openings connect current investor thesis to production trust infrastructure rather than generic AI tooling.",
-                "proposed_output": (
-                    "Draft outreach package: one tailored cold email per Tier 1 investor, each tied to a recent deal, portfolio comp, and the company's trust-infrastructure wedge."
-                ),
-                "messages": [],
-                "scratchpad_update": "Keep cold emails under 150 words and thesis-linked.",
-                "status": {"state": "active", "stakes": "medium"},
-            }),
-            "status": "active",
-            "created_at": "datetime('now', '-3 hours -50 minutes')",
-            "last_active": "datetime('now', '-3 hours -42 minutes')",
-        },
-    ]
-    for s in investor_sessions:
         conn.execute(
             f"""INSERT OR REPLACE INTO agent_sessions
                (id, agent_name, task_id, context, created_at, last_active, status)
@@ -924,39 +1246,6 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
                 )
                 counts["evals"] += 1
 
-    investor_messages = [
-        (
-            "ws-demo-investor-scout",
-            "ws-demo-investor-analyst",
-            "research_handoff",
-            "task-demo-investor-001",
-            "ws-demo-investor",
-            "Initial investor longlist is ready. Focus enrichment on firms with recent AI infra or observability deals.",
-            "-4 hours -8 minutes",
-        ),
-        (
-            "ws-demo-investor-analyst",
-            "ws-demo-investor-strategist",
-            "research_handoff",
-            "task-demo-investor-001",
-            "ws-demo-investor",
-            "Tier 1 shortlist is ready. Draft investor-specific outreach angles and cold emails next.",
-            "-3 hours -54 minutes",
-        ),
-    ]
-    for (from_a, to_a, msg_type, task_id, ws_id, content, offset) in investor_messages:
-        if not _row_exists(conn, "agent_messages",
-                           "task_id=? AND from_agent=? AND to_agent=? AND msg_type=?",
-                           (task_id, from_a, to_a, msg_type)):
-            conn.execute(
-                f"""INSERT INTO agent_messages
-                   (from_agent, to_agent, msg_type, content, task_id, workspace_id,
-                    status, created_at)
-                   VALUES (?,?,?,?,?,?,'read',datetime('now', ?))""",
-                (from_a, to_a, msg_type, content, task_id, ws_id, offset),
-            )
-            counts["messages"] += 1
-
     # ── 9. Agent messages (chain / activity feed) ─────────────────────────────
     for (from_a, to_a, msg_type, task_id, ws_id, content, offset) in _MESSAGES:
         if not _row_exists(conn, "agent_messages",
@@ -1003,14 +1292,6 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         ("ws-demo-sales", "preferred_source",   "techcrunch.com", "techcrunch.com"),
         ("ws-demo-sales", "preferred_source",   "bain.com",       "bain.com"),
         ("ws-demo-sales", "preferred_source",   "linkedin.com",   "linkedin.com"),
-        # Investor team
-        ("ws-demo-investor", "topic_preference", "topics",
-         "AI infrastructure, enterprise software, data infrastructure, vertical SaaS"),
-        ("ws-demo-investor", "platform",         "target", "briefing"),
-        ("ws-demo-investor", "preferred_source", "pitchbook.com", "pitchbook.com"),
-        ("ws-demo-investor", "preferred_source", "techcrunch.com", "techcrunch.com"),
-        ("ws-demo-investor", "preferred_source", "nvidia.com", "nvidia.com"),
-        ("ws-demo-investor", "preferred_source", "arxiv.org", "arxiv.org"),
     ]
     for ws_id, pref_type, key, value in prefs:
         conn.execute(
@@ -1020,6 +1301,8 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
             (ws_id, pref_type, key, value),
         )
         counts["prefs"] += 1
+
+    seed_investor_team(conn, counts)
 
     conn.commit()
     return counts

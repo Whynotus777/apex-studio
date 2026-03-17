@@ -200,7 +200,7 @@ The next smoke pass should stop treating the seeded app as a two-team demo. With
 |---|---|---|---|
 | Marketing Team | `ws-demo-marketing` | `content-engine` | Discover → Create → Review |
 | Sales Team | `ws-demo-sales` | `sales-outreach` | Discover → Analyze → Write → Review |
-| Investor Team | `ws-demo-investor` | `competitive-intel` | Discover → Analyze → Brief |
+| Investor Research | `ws-demo-investors` | `investor-research` | Discover → Enrich → Strategize → Review |
 
 ### New smoke checks to add
 
@@ -232,3 +232,64 @@ These endpoints are in `docs/WEBAPP_SPEC.md` and should move from placeholder co
 - `POST /api/builder/launch`
 - `GET /api/builder/categories`
 - `GET /api/builder/roles`
+
+---
+
+## Wave 2 Investor Research Results
+
+### Commands Run
+
+```bash
+PYTHONPATH=. python3 scripts/seed_demo.py
+PYTHONPATH=. python3 scripts/e2e_test.py
+```
+
+### Seed Result
+
+| Test Name | Expected Result | Actual Result | Status |
+|---|---|---|---|
+| `seed_demo.py` | Seed 3 demo teams with additive investor-research workspace and deterministic data | `Seeded 3 teams, 7 tasks, 11 evidence entries, 3 reviews pending approval` plus `21 agent sessions`, `10 eval dimensions`, `6 chain messages`, `18 preferences` | PASS |
+
+### E2E Results
+
+| Test Name | Expected Result | Actual Result | Status |
+|---|---|---|---|
+| `test_api_health` | API reachable on `localhost:8000` | API reachable | PASS |
+| `test_get_teams` | Teams list includes marketing and investor demo workspaces with valid summary shape | `ws-demo-marketing` and `ws-demo-investors` present; investor team template is `investor-research` | PASS |
+| `test_get_team_detail` | Marketing team detail returns members and 404s on bad ID | Team detail returned 4 members; bad ID returned 404 | PASS |
+| `test_get_team_members` | Marketing team returns 4 members | Returned 4 members | PASS |
+| `test_get_investor_team_members` | Investor team returns 4 members with investor-research role mix | Returned `discovery`, `enrichment`, `outreach`, `quality_gate` | PASS |
+| `test_get_team_tasks` | Marketing tasks endpoint returns tasks with critic-passed item and events | Returned 8 tasks with valid event lists | PASS |
+| `test_get_investor_team_tasks` | Investor team returns 2 tasks including one pending approval with events | Returned 2 tasks; pending task `task-demo-investors-002` is `review` + `critic_passed` | PASS |
+| `test_get_approvals` | Approvals endpoint returns pending items with valid shape and team filter | Returned 4 pending approvals; team filter worked | PASS |
+| `test_task_output` | Marketing pending task returns output content and 404s on unknown task | Returned non-empty content (`1193 chars`) and 404 for missing task | PASS |
+| `test_task_evidence` | Marketing pending task returns flattened source list | Returned 3 sources with `url` and `title` | PASS |
+| `test_task_reviews` | Marketing pending task returns critic review with dimensions | Review returned with verdict, score, and 4 dimensions | PASS |
+| `test_task_chain` | Marketing task chain returns progress items with `created_at` field | Returned 16 progress items with valid chain shape | PASS |
+| `test_investor_task_chain` | Investor pending task chain shows scout, analyst, and strategist activity | Chain included all 3 upstream investor agents | PASS |
+| `test_get_templates_list` | Templates endpoint includes `content-engine` and `investor-research` | Both templates present | PASS |
+| `test_get_template_detail` | `content-engine` template detail exposes `ui_schema.review_page.context_label = "Sources"` | Context label was `"Sources"` | PASS |
+| `test_get_team_ui_schema` | Marketing team UI schema exposes `context_label = "Sources"` | Context label was `"Sources"` | PASS |
+| `test_investor_template_exists` | `investor-research` template detail returns 200 with `ui_schema` | Returned 200 with populated `ui_schema` | PASS |
+| `test_investor_ui_schema_differs` | Content and investor templates return different review context labels and dimension keys | `Sources` vs `Investor Research`; dimension keys differed | PASS |
+| `test_multi_template_review_data` | Marketing and investor reviews expose different dimension names | Marketing and investor review dimension sets differed | PASS |
+| `test_approval_id_consistency` | Review ID and approval ID stay aligned for the marketing review page flow | `review.id == approval.id == 31` | PASS |
+| `test_approval_flow` | Approving a marketing draft removes it from pending queue | Approval succeeded and item left queue | PASS |
+| `test_edit_approve_flow` | Edited approval path returns `edited = true` | Sales approval succeeded with `edited == True` | PASS |
+| `test_revise_flow` | Revision request returns `revision_requested` with task ID | Revision request succeeded for marketing task | PASS |
+| `test_reject_flow` | Reject path returns `rejected` | Reject succeeded | PASS |
+| `test_create_task` | Mission submit endpoint creates a task and returns spawn payload | Returned 200 with `task_id`, `team_id`, `starting_agent`, `spawn` | PASS |
+
+### Final Suite Summary
+
+| Metric | Result |
+|---|---|
+| E2E assertions passed | 91 |
+| E2E assertions failed | 0 |
+| Final status | PASS |
+
+### Notes
+
+- The investor seed is now additive and uses the required workspace `ws-demo-investors` and template `investor-research`.
+- Marketing and Sales seed data were left intact.
+- The old Wave 1 investor scaffold was cleaned up during seeding so the demo state stays deterministic.

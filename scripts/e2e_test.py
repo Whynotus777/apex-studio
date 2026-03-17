@@ -29,13 +29,13 @@ except ImportError:
 BASE = "http://localhost:8000"
 DEMO_MKT_WS  = "ws-demo-marketing"
 DEMO_SALES_WS = "ws-demo-sales"
-DEMO_INVESTOR_WS = "ws-demo-investor"
+DEMO_INVESTOR_WS = "ws-demo-investors"
 DEMO_TASK_ID = "task-demo-mkt-002"
-DEMO_INVESTOR_TASK_ID = "task-demo-investor-001"
+DEMO_INVESTOR_TASK_ID = "task-demo-investors-002"
+DEMO_INVESTOR_DONE_TASK_ID = "task-demo-investors-001"
 
 PASS = 0
 FAIL = 0
-TODO = 0
 results: list[tuple[str, str, str]] = []   # (name, status, detail)
 
 
@@ -51,13 +51,6 @@ def fail(name: str, detail: str) -> None:
     FAIL += 1
     results.append((name, "FAIL", detail))
     print(f"  ❌  {name}: {detail}")
-
-
-def todo(name: str, detail: str) -> None:
-    global TODO
-    TODO += 1
-    results.append((name, "TODO", detail))
-    print(f"  ⏳  {name}: {detail}")
 
 
 def assert_fields(obj: dict, required: list[str], test_name: str) -> bool:
@@ -146,8 +139,8 @@ def test_get_teams() -> None:
     investor = next((t for t in teams if t.get("id") == DEMO_INVESTOR_WS), None)
     if investor:
         ok("Demo investor team present")
-        if investor.get("template_id") == "competitive-intel":
-            ok("Investor team template_id is competitive-intel")
+        if investor.get("template_id") == "investor-research":
+            ok("Investor team template_id is investor-research")
         else:
             fail("Investor team template_id", f"got {investor.get('template_id')!r}")
     else:
@@ -206,15 +199,15 @@ def test_get_investor_team_members() -> None:
     ok("GET /members for investor team returns 200")
 
     members: list = r.json()
-    if isinstance(members, list) and len(members) == 3:
-        ok("Investor team has 3 members")
+    if isinstance(members, list) and len(members) == 4:
+        ok("Investor team has 4 members")
         roles = {m.get("role") for m in members}
-        if roles == {"discovery", "intelligence", "quality_gate"}:
-            ok("Investor team role mix matches competitive-intel template")
+        if roles == {"discovery", "enrichment", "outreach", "quality_gate"}:
+            ok("Investor team role mix matches investor-research template")
         else:
             fail("Investor team role mix", f"got {sorted(roles)!r}")
     else:
-        fail("Investor team has 3 members", f"got {len(members) if isinstance(members, list) else members!r}")
+        fail("Investor team has 4 members", f"got {len(members) if isinstance(members, list) else members!r}")
 
 
 def test_get_team_tasks() -> None:
@@ -263,20 +256,23 @@ def test_get_investor_team_tasks() -> None:
 
     investor_task = next((t for t in tasks if t.get("id") == DEMO_INVESTOR_TASK_ID), None)
     if not investor_task:
-        fail("Investor briefing task present", f"{DEMO_INVESTOR_TASK_ID!r} not found")
+        fail("Investor pending approval task present", f"{DEMO_INVESTOR_TASK_ID!r} not found")
         return
-    ok("Investor briefing task present")
+    ok("Investor pending approval task present")
 
-    if investor_task.get("status") == "in_progress":
-        ok("Investor briefing task is in_progress")
+    if investor_task.get("status") == "review" and investor_task.get("review_status") == "critic_passed":
+        ok("Investor pending task is in review with critic_passed")
     else:
-        fail("Investor briefing task status", f"got {investor_task.get('status')!r}")
+        fail(
+            "Investor pending task status",
+            f"got status={investor_task.get('status')!r} review_status={investor_task.get('review_status')!r}",
+        )
 
     events = investor_task.get("events")
     if isinstance(events, list) and len(events) > 0:
-        ok("Investor briefing task includes chain events")
+        ok("Investor pending task includes chain events")
     else:
-        fail("Investor briefing task events", f"got {events!r}")
+        fail("Investor pending task events", f"got {events!r}")
 
 
 def test_get_approvals() -> None:
@@ -466,37 +462,124 @@ def test_investor_task_chain() -> None:
     if isinstance(progress, list) and progress:
         ok("Investor task chain has progress entries")
         agents = {step.get("agent") for step in progress}
-        if any(agent and "investor-scout" in agent for agent in agents) and any(
-            agent and "investor-analyst" in agent for agent in agents
-        ):
-            ok("Investor task chain includes scout and analyst activity")
+        if any(agent and "investors-scout" in agent for agent in agents) and any(
+            agent and "investors-analyst" in agent for agent in agents
+        ) and any(agent and "investors-strategist" in agent for agent in agents):
+            ok("Investor task chain includes scout, analyst, and strategist activity")
         else:
             fail("Investor task chain agent coverage", f"got {sorted(agents)!r}")
     else:
         fail("Investor task chain progress", f"got {progress!r}")
 
 
-def test_future_endpoint_placeholders() -> None:
-    print("\n── Placeholder coverage for upcoming endpoints ───────────")
-    placeholders = [
-        ("PATCH /api/teams/{id}", "Team settings update per WEBAPP_SPEC"),
-        ("DELETE /api/teams/{id}", "Archive team flow per WEBAPP_SPEC"),
-        ("POST /api/teams/{id}/members", "Dynamic member add flow"),
-        ("DELETE /api/teams/{id}/members/{mid}", "Dynamic member removal flow"),
-        ("GET /api/teams/{id}/preferences", "Preference read API"),
-        ("PUT /api/teams/{id}/preferences", "Preference update API"),
-        ("POST /api/teams/{id}/voice", "Voice sample upload API"),
-        ("GET /api/teams/{id}/voice", "Voice sample retrieval API"),
-        ("GET /api/teams/{id}/published", "Published history API"),
-        ("GET /api/teams/{id}/analytics", "Team analytics API"),
-        ("GET /api/teams/{id}/learnings", "Learning summary API"),
-        ("POST /api/builder/recommend", "Builder recommendation API"),
-        ("POST /api/builder/launch", "Custom launch API"),
-        ("GET /api/builder/categories", "Builder categories API"),
-        ("GET /api/builder/roles", "Builder role library API"),
-    ]
-    for name, detail in placeholders:
-        todo(name, detail)
+def test_get_templates_list() -> None:
+    print("\n── GET /api/templates ────────────────────────────────────")
+    r = get("/api/templates")
+    if r.status_code != 200:
+        fail("GET /api/templates 200", f"got {r.status_code}")
+        return
+    ok("GET /api/templates returns 200")
+    templates: list[dict] = r.json()
+    ids = {t.get("id") for t in templates}
+    if "content-engine" in ids and "investor-research" in ids:
+        ok("Templates list includes content-engine and investor-research")
+    else:
+        fail("Templates list includes required templates", f"got {sorted(ids)!r}")
+
+
+def test_get_template_detail() -> None:
+    print("\n── GET /api/templates/{id} ───────────────────────────────")
+    r = get("/api/templates/content-engine")
+    if r.status_code != 200:
+        fail("GET /api/templates/content-engine 200", f"got {r.status_code}")
+        return
+    ok("GET /api/templates/content-engine returns 200")
+    payload: dict = r.json()
+    ui_schema = payload.get("ui_schema") or {}
+    context_label = ((ui_schema.get("review_page") or {}).get("context_label"))
+    if context_label == "Sources":
+        ok("content-engine template detail has context_label == Sources")
+    else:
+        fail("content-engine context_label", f"got {context_label!r}")
+
+
+def test_get_team_ui_schema() -> None:
+    print("\n── GET /api/teams/{id}/ui-schema ─────────────────────────")
+    r = get(f"/api/teams/{DEMO_MKT_WS}/ui-schema")
+    if r.status_code != 200:
+        fail("GET team ui-schema 200", f"got {r.status_code}")
+        return
+    ok("GET team ui-schema returns 200")
+    schema: dict = r.json()
+    context_label = ((schema.get("review_page") or {}).get("context_label"))
+    if context_label == "Sources":
+        ok("Marketing team ui-schema context_label == Sources")
+    else:
+        fail("Marketing team ui-schema context_label", f"got {context_label!r}")
+
+
+def test_investor_template_exists() -> None:
+    print("\n── GET /api/templates/investor-research ──────────────────")
+    r = get("/api/templates/investor-research")
+    if r.status_code != 200:
+        fail("GET /api/templates/investor-research 200", f"got {r.status_code}")
+        return
+    ok("GET /api/templates/investor-research returns 200")
+    payload: dict = r.json()
+    if isinstance(payload.get("ui_schema"), dict):
+        ok("investor-research template returns ui_schema")
+    else:
+        fail("investor-research ui_schema present", f"got {payload.get('ui_schema')!r}")
+
+
+def test_investor_ui_schema_differs() -> None:
+    print("\n── Multi-template ui-schema comparison ───────────────────")
+    content = get("/api/templates/content-engine")
+    investor = get("/api/templates/investor-research")
+    if content.status_code != 200 or investor.status_code != 200:
+        fail(
+            "Template comparison endpoints reachable",
+            f"content={content.status_code}, investor={investor.status_code}",
+        )
+        return
+    content_schema = (content.json().get("ui_schema") or {}).get("review_page") or {}
+    investor_schema = (investor.json().get("ui_schema") or {}).get("review_page") or {}
+    content_label = content_schema.get("context_label")
+    investor_label = investor_schema.get("context_label")
+    if content_label != investor_label:
+        ok(f"context_label differs across templates ({content_label!r} vs {investor_label!r})")
+    else:
+        fail("context_label differs across templates", f"both are {content_label!r}")
+
+    content_dims = [d.get("key") for d in content_schema.get("quality_dimensions") or []]
+    investor_dims = [d.get("key") for d in investor_schema.get("quality_dimensions") or []]
+    if content_dims != investor_dims:
+        ok("quality dimension keys differ across templates")
+    else:
+        fail("quality dimension keys differ", f"both are {content_dims!r}")
+
+
+def test_multi_template_review_data() -> None:
+    print("\n── Multi-template review dimensions ──────────────────────")
+    marketing = get(f"/api/tasks/{DEMO_TASK_ID}/reviews")
+    investor = get(f"/api/tasks/{DEMO_INVESTOR_TASK_ID}/reviews")
+    if marketing.status_code != 200 or investor.status_code != 200:
+        fail(
+            "Review endpoints for multi-template comparison",
+            f"marketing={marketing.status_code}, investor={investor.status_code}",
+        )
+        return
+    marketing_dims = [d.get("name") for d in (marketing.json().get("dimensions") or [])]
+    investor_dims = [d.get("name") for d in (investor.json().get("dimensions") or [])]
+    if marketing_dims and investor_dims:
+        ok("Both marketing and investor reviews expose dimension lists")
+    else:
+        fail("Review dimension lists exist", f"marketing={marketing_dims!r}, investor={investor_dims!r}")
+        return
+    if marketing_dims != investor_dims:
+        ok("Marketing and investor review dimensions differ")
+    else:
+        fail("Marketing and investor review dimensions differ", f"both are {marketing_dims!r}")
 
 
 def test_approval_flow() -> None:
@@ -723,16 +806,21 @@ def main() -> None:
     test_task_reviews()
     test_task_chain()
     test_investor_task_chain()
+    test_get_templates_list()
+    test_get_template_detail()
+    test_get_team_ui_schema()
+    test_investor_template_exists()
+    test_investor_ui_schema_differs()
+    test_multi_template_review_data()
     test_approval_id_consistency()
     test_approval_flow()
     test_edit_approve_flow()
     test_revise_flow()
     test_reject_flow()
     test_create_task()
-    test_future_endpoint_placeholders()
 
     print("\n" + "=" * 60)
-    print(f"Results: {PASS} passed, {FAIL} failed, {TODO} placeholders")
+    print(f"Results: {PASS} passed, {FAIL} failed")
     print("=" * 60)
 
     if FAIL > 0:
