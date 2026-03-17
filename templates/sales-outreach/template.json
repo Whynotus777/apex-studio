@@ -1,0 +1,139 @@
+{
+  "name": "Sales Outreach Engine",
+  "description": "A four-agent pipeline that discovers ICP-matched prospects, enriches each company with recent signals, drafts personalized outreach, and verifies every claim before approval.",
+  "category": "sales",
+  "version": "1.0",
+  "agents": [
+    {
+      "name": "scout",
+      "role": "discovery",
+      "description": "Lead Finder — searches for companies that match the target ICP (industry, size, tech stack, growth signals) and surfaces a qualified prospect list.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": "0 8 * * 1-5",
+      "heartbeat_description": "ICP prospect scan — weekday mornings at 8:00 AM",
+      "capabilities": ["search", "icp_matching", "lead_qualification", "prospect_list"],
+      "can_message": ["analyst", "writer", "critic"],
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.3
+      }
+    },
+    {
+      "name": "analyst",
+      "role": "enrichment",
+      "description": "Company Enricher — researches each prospect for recent news, funding rounds, hiring signals, leadership changes, and product launches to surface personalization hooks.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by scout prospect list",
+      "capabilities": ["company_research", "signal_detection", "enrichment", "hook_extraction"],
+      "can_message": ["scout", "writer", "critic"],
+      "output_format": "Company Profile → Recent Signals → Personalization Hooks → Recommended Angle",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.2
+      }
+    },
+    {
+      "name": "writer",
+      "role": "outreach",
+      "description": "Outreach Drafter — writes personalized cold emails that reference specific company details from the analyst's enrichment. Never invents details.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "On-demand only, triggered by analyst enrichment",
+      "capabilities": ["cold_email", "personalization", "subject_lines", "cta_writing"],
+      "can_message": ["scout", "analyst", "critic"],
+      "output_format": "Subject Line → Email Body → Personalization Source Note → Follow-up Sequence → Approval Ask",
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.4
+      }
+    },
+    {
+      "name": "critic",
+      "role": "quality_gate",
+      "description": "Outreach Reviewer — verifies that every claim in the email is grounded in the analyst's research, checks tone, and blocks anything that fabricates details about the prospect.",
+      "model": {
+        "primary": "gemini-3-flash-preview",
+        "api_review": "claude-opus",
+        "fallback": "qwen3.5-apex",
+        "local": "qwen3.5-apex"
+      },
+      "heartbeat": null,
+      "heartbeat_description": "Continuous — processes review queue as outreach drafts arrive",
+      "capabilities": ["claim_verification", "tone_check", "grounding_audit", "blocking"],
+      "can_message": ["scout", "analyst", "writer"],
+      "stakes_routing": {
+        "low": "qwen3.5-apex",
+        "medium": "claude-opus",
+        "high": "claude-opus"
+      },
+      "api_config": {
+        "think": false,
+        "num_ctx": 4096,
+        "temperature": 0.1
+      }
+    }
+  ],
+  "pipeline": ["discover", "enrich", "draft", "review"],
+  "default_tool_grants": {
+    "scout": ["web_search"],
+    "analyst": ["web_search"]
+  },
+  "default_permissions": {
+    "autonomy": {
+      "prospect_discovery": "draft",
+      "company_enrichment": "draft",
+      "outreach_sending": "approval_required",
+      "high_stakes_actions": "human_approval_required"
+    },
+    "communication": {
+      "inter_agent_messaging": "allowlisted",
+      "user_channel": "read_only"
+    },
+    "data_access": {
+      "working_memory": "full_write",
+      "external_search": "approval_required",
+      "crm_write": "approval_required"
+    }
+  },
+  "default_budgets": {
+    "api_calls": {
+      "limit": 100.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    },
+    "tool_cost": {
+      "limit": 5.0,
+      "period": "daily",
+      "alert_threshold": 0.8
+    }
+  },
+  "heartbeats": {
+    "scout": {
+      "schedule": "0 8 * * 1-5",
+      "source": "template_default",
+      "description": "ICP prospect scan — weekday mornings at 8:00 AM"
+    },
+    "analyst": null,
+    "writer": null,
+    "critic": null
+  },
+  "required_integrations": [],
+  "optional_integrations": ["web_search", "crm", "gmail", "linkedin"],
+  "integrations": ["web_search"]
+}

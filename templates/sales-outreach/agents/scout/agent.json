@@ -1,0 +1,28 @@
+{
+  "name": "scout",
+  "role": "discovery",
+  "description": "Lead Finder — searches for companies that match the target ICP (industry, size, tech stack, growth signals) and surfaces a qualified prospect list.",
+  "model": {
+    "primary": "gemini-3-flash-preview",
+    "fallback": "qwen3.5-apex",
+    "local": "qwen3.5-apex"
+  },
+  "heartbeat": "0 8 * * 1-5",
+  "heartbeat_description": "ICP prospect scan — weekday mornings at 8:00 AM",
+  "capabilities": [
+    "search",
+    "icp_matching",
+    "lead_qualification",
+    "prospect_list"
+  ],
+  "can_message": [
+    "analyst",
+    "writer",
+    "critic"
+  ],
+  "api_config": {
+    "think": false,
+    "num_ctx": 4096,
+    "temperature": 0.3
+  }
+}
