@@ -447,6 +447,44 @@ Each channel is an adapter in `adapters/`. The kernel is channel-agnostic — ad
 ### User Onboarding Preference
 During onboarding: "How do you want to interact with your team?" and "Where should finished work be delivered?" Users pick channels, APEX configures adapters.
 
+### Agent Communication — Direct Chat & Team Channel (Phase 2/3)
+Beyond the mission-based task flow, users should be able to communicate directly with their agents.
+
+**1:1 Chat with individual agents:**
+- Open Writer → "use a more aggressive tone going forward" → Writer stores as preference
+- Open Scout → "stop using Forbes, focus on primary research" → Scout updates soft-preferences
+- These are preference-setting conversations, not task execution
+- User can flag which agents they want direct communication with during team setup
+- Default: Critic (for feedback discussion) and Writer (for tone/style guidance)
+- Power users: all agents accessible
+
+**Group Chat (Team Channel):**
+- Shows all inter-agent messages in one readable stream
+- User sees the full chain: Scout → Writer "here are 5 trending topics", Writer → Critic "draft ready", Critic → Writer "revise: weak opening"
+- User can interject at any point: "Writer, lead with a statistic not a question"
+- Basically a human-readable view of the existing `agent_messages` table
+- Team builder / operator can track everything happening across the team in real time
+
+**Agent communication preferences (set during team creation):**
+> "Which team members do you want to chat with directly?"
+> - ✅ Writer (style and tone guidance)
+> - ✅ Critic (discuss feedback)
+> - ☐ Scout (adjust research focus)
+> - ☐ Scheduler (change publishing cadence)
+>
+> "Do you want to see the team channel?"
+> - ✅ Yes — show me all inter-agent messages
+> - ☐ No — just show me final outputs and approvals
+
+**Technical implementation:**
+- 1:1 chats are new message types in `agent_messages` table with `from_user=true`
+- Agent receives user message in next spawn's inbox, processes it as a preference update or direct instruction
+- Group chat is a read-only view of all `agent_messages` for the workspace, with user messages interleaved
+- Web UI: chat panel per agent + team channel tab
+- Telegram: `/chat <agent>` command for 1:1, `/team <workspace>` for group view
+
+**When to build:** After web UI exists. Chat in Telegram is clunky; chat in a web app is natural. This is a Phase 2/3 feature that makes the product feel like managing a real team.
+
 ### Implementation Path
 - **Now**: Telegram (built) + Web App (next priority)
 - **Phase 2**: Email + SMS + WhatsApp
