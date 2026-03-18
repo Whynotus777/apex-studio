@@ -1617,3 +1617,127 @@ class ApexKernel:
         Falls back to 'Quality Editor' if no critic agent is found.
         """
         return self._display_resolver().get_critic_display_name(workspace_id)
+
+    # ── Architect chat sessions ─────────────────────────────────────────
+
+    def _ensure_chat_sessions_table(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'collecting',
+                    goal TEXT,
+                    recommended_template_id TEXT,
+                    workspace_id TEXT,
+                    conversation_json TEXT NOT NULL DEFAULT '[]',
+                    meta TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now')),
+                    launched_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_user
+                    ON chat_sessions(user_id, updated_at);
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_status
+                    ON chat_sessions(status, updated_at);
+                """
+            )
+            conn.commit()
+
+    def create_chat_session(self, user_id: str = "default") -> dict[str, Any]:
+        self._ensure_chat_sessions_table()
+        session_id = f"chat-{uuid.uuid4().hex[:12]}"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_sessions
+                    (id, user_id, status, conversation_json, meta, created_at, updated_at)
+                VALUES (?, ?, 'collecting', '[]', '{}', datetime('now'), datetime('now'))
+                """,
+                (session_id, user_id),
+            )
+            row = conn.execute(
+                "SELECT id, created_at FROM chat_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            conn.commit()
+        return {
+            "session_id": row["id"],
+            "created_at": row["created_at"],
+        }
+
+    def get_chat_session(self, session_id: str) -> dict[str, Any]:
+        self._ensure_chat_sessions_table()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, user_id, status, goal, recommended_template_id, workspace_id,
+                       conversation_json, meta, created_at, updated_at, launched_at
+                FROM chat_sessions
+                WHERE id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"Chat session '{session_id}' does not exist.")
+        result = dict(row)
+        result["messages"] = self._load_json(result.pop("conversation_json", "[]"), fallback=[])
+        result["meta"] = self._load_json(result.get("meta"), fallback={})
+        return result
+
+    def get_active_chat_sessions(self, user_id: str = "default") -> list[dict[str, Any]]:
+        self._ensure_chat_sessions_table()
+        rows = self._fetch_all(
+            """
+            SELECT id, user_id, status, goal, recommended_template_id, workspace_id,
+                   conversation_json, meta, created_at, updated_at, launched_at
+            FROM chat_sessions
+            WHERE user_id = ? AND status NOT IN ('launched', 'abandoned')
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            (user_id,),
+        )
+        sessions: list[dict[str, Any]] = []
+        for row in rows:
+            row["messages"] = self._load_json(row.pop("conversation_json", "[]"), fallback=[])
+            row["meta"] = self._load_json(row.get("meta"), fallback={})
+            sessions.append(row)
+        return sessions
+
+    # ── Document helpers ──────────────────────────────────────────────────
+
+    def _doc_store(self):  # type: ignore[return]
+        """Lazy-load DocumentStore."""
+        try:
+            from kernel.documents import DocumentStore
+        except ImportError:
+            from documents import DocumentStore  # type: ignore[no-redef]
+        return DocumentStore(self.db_path)
+
+    def upload_document(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+        workspace_id: str | None = None,
+        chat_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Store a document and extract its text. Returns {id, filename, content_type, char_count, summary}."""
+        return self._doc_store().upload_document(
+            file_bytes, filename, content_type, workspace_id, chat_session_id
+        )
+
+    def get_workspace_documents(self, workspace_id: str) -> list[dict[str, Any]]:
+        """Return all documents for a workspace, ordered newest first."""
+        return self._doc_store().get_documents(workspace_id)
+
+    def get_document_context(self, workspace_id: str) -> str | None:
+        """Return formatted document context block for injection into agent prompts."""
+        return self._doc_store().get_document_context(workspace_id)
+
+    def link_documents_to_workspace(
+        self, chat_session_id: str, workspace_id: str
+    ) -> None:
+        """Re-link all documents from a chat session to a workspace after launch."""
+        self._doc_store().link_to_workspace(chat_session_id, workspace_id)

@@ -965,6 +965,7 @@ _MESSAGES = [
 def seed(conn: sqlite3.Connection) -> dict[str, int]:
     counts = {"teams": 0, "tasks": 0, "evidence": 0, "sessions": 0,
               "reviews_pending": 0, "reviews_total": 0, "messages": 0,
+              "chat_sessions": 0,
               "evals": 0, "prefs": 0}
 
     # ── 1. Goals ──────────────────────────────────────────────────────────────
@@ -1302,6 +1303,75 @@ def seed(conn: sqlite3.Connection) -> dict[str, int]:
         )
         counts["prefs"] += 1
 
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'collecting',
+            goal TEXT,
+            recommended_template_id TEXT,
+            workspace_id TEXT,
+            conversation_json TEXT NOT NULL DEFAULT '[]',
+            meta TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            launched_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_user
+            ON chat_sessions(user_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_status
+            ON chat_sessions(status, updated_at);
+        """
+    )
+    conn.execute("DELETE FROM chat_sessions WHERE id = 'chat-demo-content-001'")
+    conn.execute(
+        """
+        INSERT INTO chat_sessions
+            (id, user_id, status, goal, recommended_template_id, workspace_id,
+             conversation_json, meta, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, datetime('now', '-2 hours'), datetime('now', '-45 minutes'))
+        """,
+        (
+            "chat-demo-content-001",
+            "default",
+            "launch_ready",
+            "Build a content team that turns AI infrastructure research into sharp LinkedIn posts three times per week.",
+            "content-engine",
+            json.dumps([
+                {
+                    "id": "msg-demo-001",
+                    "role": "user",
+                    "content": "I need a team that researches AI infrastructure trends and turns them into sharp LinkedIn posts.",
+                    "metadata": {},
+                    "created_at": "2026-03-18 09:00:00",
+                },
+                {
+                    "id": "msg-demo-002",
+                    "role": "assistant",
+                    "content": "I recommend the Content Engine. It gives you research, drafting, review, and publishing in one chain.",
+                    "metadata": {"template_id": "content-engine"},
+                    "created_at": "2026-03-18 09:01:00",
+                },
+                {
+                    "id": "msg-demo-003",
+                    "role": "user",
+                    "content": "Great. I want three posts per week for LinkedIn and X with a bold, operator-style tone.",
+                    "metadata": {"platforms": ["linkedin", "x"], "tone": "bold_opinionated"},
+                    "created_at": "2026-03-18 09:02:00",
+                },
+            ]),
+            json.dumps(
+                {
+                    "source": "seed_demo",
+                    "ready_to_launch": True,
+                    "suggested_name": "AI Content Team",
+                }
+            ),
+        ),
+    )
+    counts["chat_sessions"] += 1
+
     seed_investor_team(conn, counts)
 
     conn.commit()
@@ -1327,6 +1397,7 @@ def main() -> None:
     )
     print(
         f"  ↳ {c['sessions']} agent sessions  |  "
+        f"{c['chat_sessions']} architect chats  |  "
         f"{c['evals']} eval dimensions  |  "
         f"{c['messages']} chain messages  |  "
         f"{c['prefs']} preferences"

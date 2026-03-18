@@ -282,6 +282,25 @@ def build_mission_brief() -> str:
         return ""
 
 
+def build_document_context() -> str:
+    """Return uploaded document context block for this workspace, or empty string.
+
+    Documents are capped at 5000 chars total to prevent context flooding.
+    Agents without uploaded documents are unaffected — this is purely additive.
+    """
+    ws_id = AGENT_NAME.rsplit("-", 1)[0] if "-" in AGENT_NAME else ""
+    if not ws_id.startswith("ws-"):
+        return ""
+    try:
+        from kernel.documents import DocumentStore
+        ds = DocumentStore(DB_PATH)
+        ctx = ds.get_document_context(ws_id, max_chars=5000)
+        return ctx or ""
+    except Exception as exc:
+        print(f"[spawn_context] build_document_context error: {exc}", file=sys.stderr)
+        return ""
+
+
 def main() -> None:
     parts: list[str] = []
 
@@ -294,6 +313,12 @@ def main() -> None:
         evidence = build_evidence()
         if evidence:
             parts.append(evidence)
+
+    # Document context injected after evidence, before learning.
+    # Agents read uploaded files as additional grounding material.
+    doc_context = build_document_context()
+    if doc_context:
+        parts.append(doc_context)
 
     learning = build_learning()
     if learning:

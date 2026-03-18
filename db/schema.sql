@@ -150,3 +150,33 @@ CREATE TABLE IF NOT EXISTS evidence (
     results TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
+-- Phase F: Architect chat sessions
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'collecting',
+    goal TEXT,
+    recommended_template_id TEXT,
+    workspace_id TEXT,
+    conversation_json TEXT NOT NULL DEFAULT '[]',
+    meta TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    launched_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_status ON chat_sessions(status, updated_at);
+-- Phase F: Document storage
+CREATE TABLE IF NOT EXISTS workspace_documents (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    workspace_id TEXT,
+    chat_session_id TEXT,
+    extracted_text TEXT NOT NULL,
+    char_count INTEGER NOT NULL,
+    summary TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_documents_workspace ON workspace_documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_documents_chat ON workspace_documents(chat_session_id);

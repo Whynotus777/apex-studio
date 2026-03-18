@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -751,6 +751,11 @@ def _build_review_recommendation_summary(
     dimensions: list[dict[str, Any]],
     raw_feedback: Any,
 ) -> str:
+    # No verdict → review is still pending. Return empty so the UI renders a
+    # clean "Awaiting quality review" state with no score callouts mixed in.
+    if not verdict:
+        return ""
+
     display_name = _get_critic_display_name().rstrip(".")
     action = _REVIEW_VERDICT_ACTIONS.get((verdict or "").upper(), "shared feedback")
     sentences: list[str] = [f"{display_name} {action}."]
@@ -2090,3 +2095,257 @@ def architect_recommend(payload: ArchitectRecommendRequest) -> dict[str, Any]:
             },
         ],
     }
+
+
+# ── Document upload endpoints ─────────────────────────────────────────
+
+
+def _upload_and_store(
+    file: UploadFile,
+    workspace_id: str | None,
+    chat_session_id: str | None,
+) -> dict[str, Any]:
+    """Shared logic for both document upload endpoints."""
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="No filename provided.")
+
+    content_type = file.content_type or "application/octet-stream"
+    file_bytes = file.file.read()
+
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    if len(file_bytes) > 20 * 1024 * 1024:  # 20 MB hard limit
+        raise HTTPException(
+            status_code=413,
+            detail="File too large. Maximum 20 MB.",
+        )
+
+    try:
+        return kernel.upload_document(
+            file_bytes=file_bytes,
+            filename=file.filename,
+            content_type=content_type,
+            workspace_id=workspace_id,
+            chat_session_id=chat_session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/chat/{session_id}/documents")
+def upload_chat_document(
+    session_id: str,
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """
+    Upload a file during a chat session.
+
+    Accepts multipart/form-data with a 'file' field.
+    Extracts text, stores it linked to the chat session.
+    Returns {id, filename, char_count, summary}.
+
+    curl -X POST http://localhost:8000/api/chat/{session_id}/documents \\
+         -F "file=@requirements.pdf"
+    """
+    return _upload_and_store(
+        file=file,
+        workspace_id=None,
+        chat_session_id=session_id,
+    )
+
+
+@app.post("/api/teams/{team_id}/documents")
+def upload_team_document(
+    team_id: str,
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """
+    Upload a file directly to a team workspace.
+
+    Accepts multipart/form-data with a 'file' field.
+    Extracts text, stores it linked to the workspace.
+    Returns {id, filename, char_count, summary}.
+
+    curl -X POST http://localhost:8000/api/teams/{id}/documents \\
+         -F "file=@brief.pdf"
+    """
+    _workspace_or_404(team_id)
+    return _upload_and_store(
+        file=file,
+        workspace_id=team_id,
+        chat_session_id=None,
+    )
+
+
+@app.get("/api/teams/{team_id}/documents")
+def list_team_documents(team_id: str) -> list[dict[str, Any]]:
+    """
+    List all documents uploaded to a team workspace.
+
+    Returns [{id, filename, content_type, char_count, summary, created_at}].
+    """
+    _workspace_or_404(team_id)
+    return kernel.get_workspace_documents(team_id)
+
+
+# ── Chat / Architect conversation endpoints ───────────────────────────
+#
+# These endpoints power the conversational team-builder flow.
+# TinkerArchitect manages multi-turn conversation, streams SSE events,
+# and falls back to keyword matching when ANTHROPIC_API_KEY is absent.
+
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+try:
+    from api.architect import TinkerArchitect
+except ImportError:
+    from architect import TinkerArchitect  # type: ignore[no-redef]
+
+_architect = TinkerArchitect(db_path=APEX_HOME / "db" / "apex_state.db")
+
+
+class ChatMessageRequest(BaseModel):
+    content: str
+
+
+@app.post("/api/chat/sessions")
+def create_chat_session() -> dict[str, Any]:
+    """
+    Create a new architect chat session.
+
+    Returns: { session_id: str }
+
+    curl -X POST http://localhost:8000/api/chat/sessions | python3 -m json.tool
+    """
+    session_id = _architect.create_session()
+    return {"session_id": session_id}
+
+
+@app.get("/api/chat/{session_id}")
+def get_chat_session(session_id: str) -> dict[str, Any]:
+    """
+    Get a chat session with full message history.
+
+    Returns: {
+      id, status, goal, recommended_template_id, workspace_id,
+      messages: [{role, content}], launch_config, created_at, updated_at
+    }
+    """
+    session = _architect.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return session
+
+
+@app.post("/api/chat/{session_id}/message")
+async def send_chat_message(
+    session_id: str, payload: ChatMessageRequest
+) -> StreamingResponse:
+    """
+    Send a message in the architect conversation. Returns an SSE stream.
+
+    SSE event types:
+      data: {"type": "text_delta", "content": "..."}
+      data: {"type": "structured", "block_type": "team_recommendation", "data": {...}}
+      data: {"type": "structured", "block_type": "follow_up_question", "data": {...}}
+      data: {"type": "structured", "block_type": "launch_ready", "data": {...}}
+      data: {"type": "error", "content": "..."}
+      data: {"type": "done"}
+
+    curl -X POST http://localhost:8000/api/chat/{session_id}/message \\
+         -H "Content-Type: application/json" \\
+         -d '{"content": "I need help creating LinkedIn content every week"}' \\
+         --no-buffer
+    """
+    session = _architect.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    async def event_stream():
+        async for event in _architect.chat(session_id, payload.content):
+            yield event
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/chat/{session_id}/launch")
+def launch_from_chat(session_id: str) -> dict[str, Any]:
+    """
+    Launch the team recommended during the chat conversation.
+
+    Reads the session's recommended_template_id and launch_config,
+    calls kernel.launch_template(), creates a mission brief if a goal
+    was stated, links uploaded documents to the new workspace.
+
+    Returns: { workspace_id: str, team_name: str }
+
+    curl -X POST http://localhost:8000/api/chat/{session_id}/launch | python3 -m json.tool
+    """
+    session = _architect.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    template_id = session.get("recommended_template_id")
+    if not template_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No team has been recommended in this conversation yet.",
+        )
+
+    # Build overrides from launch_config stored during conversation
+    launch_config: dict[str, Any] = session.get("launch_config") or {}
+    overrides: dict[str, Any] = {}
+    if isinstance(launch_config, dict) and launch_config.get("name"):
+        overrides["workspace_name"] = launch_config["name"]
+
+    try:
+        result = kernel.launch_template(template_id, overrides=overrides)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    workspace_id: str = result.get("workspace_id") or result.get("id", "")
+    team_name: str = result.get("name") or workspace_id
+
+    # Create mission brief if a goal is available (from conversation or config)
+    goal = (
+        session.get("goal")
+        or (launch_config.get("goal") if isinstance(launch_config, dict) else None)
+        or (launch_config.get("topics") if isinstance(launch_config, dict) else None)
+    )
+    if goal and workspace_id:
+        try:
+            with kernel._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO mission_briefs
+                    (workspace_id, objective, status, constraints, created_at)
+                    VALUES (?, ?, 'active', '[]', datetime('now'))
+                    """,
+                    (workspace_id, str(goal)),
+                )
+        except Exception:
+            pass  # Non-critical — launch still succeeds
+
+    # Link any documents uploaded during chat to the new workspace
+    if workspace_id:
+        try:
+            with kernel._connect() as conn:
+                conn.execute(
+                    "UPDATE workspace_documents SET workspace_id = ? "
+                    "WHERE chat_session_id = ? AND workspace_id IS NULL",
+                    (workspace_id, session_id),
+                )
+        except Exception:
+            pass  # workspace_documents table may not exist in all deployments
+
+    # Mark session as launched
+    _architect.mark_launched(session_id, workspace_id)
+
+    return {"workspace_id": workspace_id, "team_name": team_name}

@@ -1,2 +1,6 @@
 fastapi
 uvicorn
+anthropic
+python-multipart
+pdfplumber
+PyPDF2
