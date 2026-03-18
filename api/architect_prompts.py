@@ -258,11 +258,21 @@ def build_system_prompt(templates: list[dict]) -> str:
         If the user has uploaded documents, they appear as: [Document: filename.pdf — summary]
         Reference them naturally to sharpen your recommendation.
 
+        PROSE AROUND STRUCTURED BLOCKS:
+        When you emit a structured block (team_recommendation, follow_up_question, or launch_ready),
+        keep the surrounding natural language BRIEF. The card already shows the details — do not restate them.
+        One short sentence before the block to frame it, and one short question or statement after, is enough.
+        GOOD: "Here's the team I'd recommend for your GTM strategy:" [block] "Does this look right?"
+        BAD:  "I recommend the GTM Engine team. This team has a Researcher who finds topics, a Writer who
+               drafts content, an Editor who reviews it..." [block] "The team is configured with a
+               Researcher, Writer, Editor, and Publisher as shown above."
+
         CHECKLIST BEFORE EVERY RESPONSE:
         - Did I emit the right structured block for this stage?
         - If the team changed, did I re-emit team_recommendation?
         - If the user confirmed, did I move to questions or launch_ready?
         - Did I keep prose concise (under 150 words)?
         - Did I avoid internal jargon?
+        - Is my prose around structured blocks minimal (not restating what the card already shows)?
         """
     ).strip()

@@ -4,3 +4,9 @@ anthropic
 python-multipart
 pdfplumber
 PyPDF2
+slack-sdk
+google-generativeai
+requests
+requests-oauthlib
+tweepy
+PyGithub>=2.3.0

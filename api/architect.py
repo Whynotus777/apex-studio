@@ -95,7 +95,7 @@ class TinkerArchitect:
     """
 
     MODEL = "claude-sonnet-4-6"
-    GEMINI_MODEL = "gemini-2.5-flash-lite-preview-06-17"
+    GEMINI_MODEL = "gemini-2.5-flash-lite"
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or (APEX_HOME / "db" / "apex_state.db")
@@ -434,11 +434,14 @@ class TinkerArchitect:
                 })
                 if block["block_type"] in ("team_recommendation", "launch_ready"):
                     template_id = str(block["data"].get("template_id", ""))
-                    launch_config = (
-                        block["data"].get("config")
-                        if block["block_type"] == "launch_ready"
-                        else None
-                    )
+                    launch_config = None
+                    if block["block_type"] == "launch_ready":
+                        # Merge the team name into the config so launch_from_chat
+                        # can pass it as workspace_name to kernel.launch_template().
+                        launch_config = dict(block["data"].get("config") or {})
+                        block_name = block["data"].get("name")
+                        if block_name:
+                            launch_config["name"] = block_name
                     if template_id:
                         self._save_recommendation(session_id, template_id, launch_config)
             messages.append({"role": "assistant", "content": full_response})

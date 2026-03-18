@@ -180,3 +180,19 @@ CREATE TABLE IF NOT EXISTS workspace_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_documents_workspace ON workspace_documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_documents_chat ON workspace_documents(chat_session_id);
+-- Phase G: Third-party integrations (OAuth tokens, one row per provider+user)
+CREATE TABLE IF NOT EXISTS integrations (
+    id                TEXT PRIMARY KEY,          -- UUID
+    provider          TEXT NOT NULL,             -- 'github', 'slack', ...
+    user_id           TEXT NOT NULL DEFAULT 'default',
+    access_token      TEXT NOT NULL,
+    token_type        TEXT DEFAULT 'bearer',
+    scope             TEXT,                      -- space/comma-separated granted scopes
+    github_login      TEXT,                      -- GitHub: username
+    github_name       TEXT,                      -- GitHub: display name
+    github_avatar_url TEXT,                      -- GitHub: avatar URL
+    created_at        TEXT DEFAULT (datetime('now')),
+    updated_at        TEXT DEFAULT (datetime('now')),
+    UNIQUE(provider, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_integrations_provider ON integrations(provider, user_id);

@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import difflib
 import json
+import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
+
+_pipeline_log = logging.getLogger("apex.pipeline")
 
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from api.integrations.slack import router as slack_integration_router
+from api.integrations.linkedin import router as linkedin_integration_router
 from kernel.api import ApexKernel
 from kernel.evidence import EvidenceStore
 from kernel.learning import AgentLearning
@@ -108,6 +114,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(slack_integration_router)
+app.include_router(linkedin_integration_router)
 
 
 @app.on_event("startup")
@@ -202,6 +210,50 @@ def _resolve_start_agent(team_id: str, workspace: dict[str, Any], pipeline_stage
     agent_id = f"{team_id}-{role}"
     kernel._ensure_agent_exists(agent_id)
     return agent_id
+
+
+def _get_ordered_pipeline_agents(team_id: str, workspace: dict[str, Any]) -> list[str]:
+    """Return workspace-namespaced agent IDs in template pipeline order."""
+    manifest = kernel.get_template(workspace["template_id"])
+    return [
+        f"{team_id}-{agent['name']}"
+        for agent in manifest.get("agents", [])
+        if agent.get("name")
+    ]
+
+
+def _run_pipeline_chain(task_id: str, agent_ids: list[str]) -> None:
+    """
+    Spawn agents sequentially in a background thread.
+    Stops early if the task is cancelled, failed, or enters review state.
+    Each kernel.spawn_agent() call blocks until that agent finishes.
+    """
+    for agent_id in agent_ids:
+        try:
+            with kernel._connect() as conn:
+                row = conn.execute(
+                    "SELECT status FROM tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+            if not row:
+                _pipeline_log.warning("Pipeline chain: task %s not found, stopping", task_id)
+                break
+            status = row["status"]
+            if status in ("cancelled", "failed"):
+                _pipeline_log.info("Pipeline chain: task %s is %s, stopping", task_id, status)
+                break
+            if status in ("review", "needs_review", "pending_approval"):
+                _pipeline_log.info("Pipeline chain: task %s already in review, stopping", task_id)
+                break
+
+            _pipeline_log.info("Pipeline chain: spawning %s for task %s", agent_id, task_id)
+            kernel.spawn_agent(agent_id, task_id)
+            _pipeline_log.info("Pipeline chain: %s finished for task %s", agent_id, task_id)
+
+        except Exception as exc:
+            _pipeline_log.error(
+                "Pipeline chain: %s failed for task %s: %s", agent_id, task_id, exc
+            )
+            break
 
 
 def _store_learning_diff(workspace_id: str, task_id: str, original: str, edited: str) -> None:
@@ -444,14 +496,39 @@ def create_team_task(team_id: str, payload: TeamTaskCreateRequest) -> dict[str, 
     with kernel._connect() as conn:
         conn.execute("UPDATE tasks SET workspace_id = ? WHERE id = ?", (team_id, task_id))
         conn.commit()
-    agent_id = _resolve_start_agent(team_id, workspace, payload.pipeline_stage)
-    kernel.assign_task(task_id, agent_id)
-    spawn_result = kernel.spawn_agent(agent_id, task_id)
+
+    # Resolve the start agent (first stage in the pipeline)
+    start_agent_id = _resolve_start_agent(team_id, workspace, payload.pipeline_stage)
+    kernel.assign_task(task_id, start_agent_id)
+
+    # Build the full ordered pipeline: all agents from the start agent onwards
+    try:
+        all_agents = _get_ordered_pipeline_agents(team_id, workspace)
+        try:
+            start_idx = all_agents.index(start_agent_id)
+        except ValueError:
+            start_idx = 0
+        pipeline_agents = all_agents[start_idx:]
+    except Exception:
+        pipeline_agents = [start_agent_id]
+
+    # Run the full pipeline in a background thread so the HTTP response
+    # returns immediately. The thread advances Scout → Writer → Critic
+    # sequentially, stopping when the task reaches review state.
+    thread = threading.Thread(
+        target=_run_pipeline_chain,
+        args=(task_id, pipeline_agents),
+        daemon=True,
+        name=f"pipeline-{task_id[:8]}",
+    )
+    thread.start()
+
     return {
         "task_id": task_id,
         "team_id": team_id,
-        "starting_agent": agent_id,
-        "spawn": spawn_result,
+        "starting_agent": start_agent_id,
+        "pipeline": pipeline_agents,
+        "status": "running",
     }
 
 
@@ -2311,7 +2388,13 @@ def launch_from_chat(session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     workspace_id: str = result.get("workspace_id") or result.get("id", "")
-    team_name: str = result.get("name") or workspace_id
+    # Fetch the friendly workspace name stored during create_workspace()
+    # (launch_template returns "template_name", not the user-facing workspace name)
+    try:
+        ws_row = kernel.get_workspace(workspace_id)
+        team_name: str = ws_row.get("name") or workspace_id
+    except Exception:
+        team_name = result.get("template_name") or workspace_id
 
     # Create mission brief if a goal is available (from conversation or config)
     goal = (
@@ -2349,3 +2432,248 @@ def launch_from_chat(session_id: str) -> dict[str, Any]:
     _architect.mark_launched(session_id, workspace_id)
 
     return {"workspace_id": workspace_id, "team_name": team_name}
+
+
+# ── GitHub integration ────────────────────────────────────────────────────────
+
+try:
+    from api.integrations.github import router as _github_router
+except ImportError:
+    from integrations.github import router as _github_router  # type: ignore[no-redef]
+
+app.include_router(_github_router)
+
+
+# ── Consolidated integrations status ─────────────────────────────────────────
+
+try:
+    from api.integrations.twitter import router as _twitter_router
+except ImportError:
+    try:
+        from integrations.twitter import router as _twitter_router  # type: ignore[no-redef]
+    except ImportError:
+        _twitter_router = None  # type: ignore[assignment]
+
+if _twitter_router is not None:
+    app.include_router(_twitter_router)
+
+
+_SUPPORTED_INTEGRATIONS: tuple[dict[str, str | None], ...] = (
+    {
+        "provider": "linkedin",
+        "label": "LinkedIn",
+        "auth_url": "/api/integrations/linkedin/auth?redirect_after=/settings",
+        "disconnect_url": "/api/integrations/linkedin",
+    },
+    {
+        "provider": "twitter",
+        "label": "X",
+        "auth_url": "/api/integrations/twitter/auth?return_url=/settings",
+        "disconnect_url": "/api/integrations/twitter",
+    },
+    {
+        "provider": "github",
+        "label": "GitHub",
+        "auth_url": "/api/integrations/github/auth",
+        "disconnect_url": "/api/integrations/github",
+    },
+    {
+        "provider": "slack",
+        "label": "Slack",
+        "auth_url": "/api/integrations/slack/auth",
+        "disconnect_url": "/api/integrations/slack",
+    },
+    {
+        "provider": "telegram",
+        "label": "Telegram",
+        "auth_url": None,
+        "disconnect_url": "/api/integrations/telegram",
+    },
+    {
+        "provider": "whatsapp",
+        "label": "WhatsApp",
+        "auth_url": None,
+        "disconnect_url": "/api/integrations/whatsapp",
+    },
+)
+
+
+def _has_table(table_name: str) -> bool:
+    with kernel._connect() as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+    return row is not None
+
+
+def _table_columns(table_name: str) -> set[str]:
+    if not _has_table(table_name):
+        return set()
+    with kernel._connect() as conn:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _is_valid_integration_token(access_token: Any, expires_at: Any) -> bool:
+    if not access_token:
+        return False
+    if not expires_at:
+        return True
+
+    from datetime import datetime, timezone
+
+    raw_value = str(expires_at).strip()
+    if not raw_value:
+        return True
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed >= datetime.now(timezone.utc)
+
+
+def _integration_from_shared_table(provider: str, label: str, auth_url: str | None, disconnect_url: str) -> dict[str, Any]:
+    columns = _table_columns("integrations")
+    if not columns:
+        return {
+            "provider": provider,
+            "label": label,
+            "connected": False,
+            "account_name": None,
+            "auth_url": auth_url,
+            "disconnect_url": disconnect_url,
+        }
+
+    select_parts = ["provider", "access_token"] if "access_token" in columns else ["provider"]
+    optional_fields = [
+        "updated_at",
+        "expires_at",
+        "status",
+        "team_name",
+        "user_name",
+        "github_name",
+        "github_login",
+    ]
+    select_parts.extend(field for field in optional_fields if field in columns)
+    order_by = "updated_at DESC" if "updated_at" in columns else "rowid DESC"
+
+    with kernel._connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {", ".join(select_parts)}
+            FROM integrations
+            WHERE provider = ?
+            ORDER BY {order_by}
+            LIMIT 1
+            """,
+            (provider,),
+        ).fetchone()
+
+    connected = False
+    account_name = None
+    if row is not None:
+        row_data = dict(row)
+        connected = _is_valid_integration_token(
+            row_data.get("access_token"),
+            row_data.get("expires_at"),
+        )
+        if connected and row_data.get("status") in {"pending", "error", "revoked"}:
+            connected = False
+        account_name = (
+            row_data.get("team_name")
+            or row_data.get("user_name")
+            or row_data.get("github_name")
+            or row_data.get("github_login")
+        )
+
+    return {
+        "provider": provider,
+        "label": label,
+        "connected": connected,
+        "account_name": account_name,
+        "auth_url": auth_url,
+        "disconnect_url": disconnect_url,
+    }
+
+
+def _linkedin_integration_status(label: str, auth_url: str | None, disconnect_url: str) -> dict[str, Any]:
+    columns = _table_columns("linkedin_tokens")
+    if not columns:
+        return {
+            "provider": "linkedin",
+            "label": label,
+            "connected": False,
+            "account_name": None,
+            "auth_url": auth_url,
+            "disconnect_url": disconnect_url,
+        }
+
+    select_parts = ["access_token"]
+    if "expires_at" in columns:
+        select_parts.append("expires_at")
+    if "person_name" in columns:
+        select_parts.append("person_name")
+
+    with kernel._connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {", ".join(select_parts)}
+            FROM linkedin_tokens
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    return {
+        "provider": "linkedin",
+        "label": label,
+        "connected": _is_valid_integration_token(
+            row["access_token"] if row else None,
+            row["expires_at"] if row and "expires_at" in columns else None,
+        ),
+        "account_name": row["person_name"] if row and "person_name" in columns else None,
+        "auth_url": auth_url,
+        "disconnect_url": disconnect_url,
+    }
+
+
+@app.get("/api/integrations/status")
+def get_integrations_status() -> dict[str, Any]:
+    integrations: list[dict[str, Any]] = []
+    for config in _SUPPORTED_INTEGRATIONS:
+        provider = str(config["provider"])
+        if provider == "linkedin":
+            item = _linkedin_integration_status(
+                label=str(config["label"]),
+                auth_url=config["auth_url"],
+                disconnect_url=str(config["disconnect_url"]),
+            )
+        else:
+            item = _integration_from_shared_table(
+                provider=provider,
+                label=str(config["label"]),
+                auth_url=config["auth_url"],
+                disconnect_url=str(config["disconnect_url"]),
+            )
+        integrations.append(item)
+    return {"integrations": integrations}
+
+
+@app.delete("/api/integrations/{provider}")
+def disconnect_integration(provider: str) -> dict[str, str]:
+    normalized_provider = provider.strip().lower()
+    supported = {str(item["provider"]) for item in _SUPPORTED_INTEGRATIONS}
+    if normalized_provider not in supported:
+        raise HTTPException(status_code=404, detail=f"Unsupported integration '{provider}'.")
+
+    with kernel._connect() as conn:
+        if normalized_provider == "linkedin" and _has_table("linkedin_tokens"):
+            conn.execute("DELETE FROM linkedin_tokens")
+        elif normalized_provider in {"github", "slack", "twitter"} and _has_table("integrations"):
+            conn.execute("DELETE FROM integrations WHERE provider = ?", (normalized_provider,))
+        conn.commit()
+
+    return {"status": "disconnected", "provider": normalized_provider}
