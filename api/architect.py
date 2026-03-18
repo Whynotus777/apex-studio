@@ -2,8 +2,13 @@
 api/architect.py — TinkerArchitect: conversational team-building engine.
 
 Manages multi-turn conversation between user and Tinker's architect.
-Streams responses as SSE events. Falls back to keyword matching when
-ANTHROPIC_API_KEY is not set.
+Streams responses as SSE events.
+
+Model priority:
+  1. ANTHROPIC_API_KEY   → Claude Sonnet (claude-sonnet-4-6)
+  2. GEMINI_API_KEY or
+     GOOGLE_API_KEY      → Gemini 2.5 Flash Lite Preview (google-generativeai)
+  3. neither             → keyword fallback (no API call)
 """
 from __future__ import annotations
 
@@ -20,6 +25,12 @@ try:
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
+
+try:
+    import google.generativeai as genai
+    _GEMINI_AVAILABLE = True
+except ImportError:
+    _GEMINI_AVAILABLE = False
 
 try:
     from api.architect_prompts import build_system_prompt
@@ -84,20 +95,46 @@ class TinkerArchitect:
     """
 
     MODEL = "claude-sonnet-4-6"
+    GEMINI_MODEL = "gemini-2.5-flash-lite-preview-06-17"
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or (APEX_HOME / "db" / "apex_state.db")
         self.templates = self._load_all_templates()
+
         self._client: anthropic.AsyncAnthropic | None = None
+        self._gemini_model: genai.GenerativeModel | None = None  # type: ignore[name-defined]
+
+        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+        # Priority 1: Anthropic
         if _ANTHROPIC_AVAILABLE and os.environ.get("ANTHROPIC_API_KEY"):
             try:
                 self._client = anthropic.AsyncAnthropic()
-            except Exception:
+                print(f"[TinkerArchitect] model=claude/{self.MODEL}")
+            except Exception as exc:
+                print(f"[TinkerArchitect] Anthropic init failed: {exc}")
                 self._client = None
+
+        # Priority 2: Gemini (only if Anthropic wasn't initialised)
+        if self._client is None and _GEMINI_AVAILABLE and gemini_key:
+            try:
+                genai.configure(api_key=gemini_key)
+                self._gemini_model = genai.GenerativeModel(
+                    model_name=self.GEMINI_MODEL,
+                    system_instruction=self._build_system_prompt(),
+                )
+                print(f"[TinkerArchitect] model=gemini/{self.GEMINI_MODEL}")
+            except Exception as exc:
+                print(f"[TinkerArchitect] Gemini init failed: {exc}")
+                self._gemini_model = None
+
+        # Priority 3: no key available
+        if self._client is None and self._gemini_model is None:
+            print("[TinkerArchitect] No API key found — keyword fallback active")
 
     @property
     def has_llm(self) -> bool:
-        return self._client is not None
+        return self._client is not None or self._gemini_model is not None
 
     # ── DB helpers ────────────────────────────────────────────────────
 
@@ -384,10 +421,33 @@ class TinkerArchitect:
             yield _sse({"type": "done"})
             return
 
-        # ── LLM path: stream from Claude ──────────────────────────────
-        system_prompt = self._build_system_prompt()
+        # ── Shared helper: emit structured blocks + persist ───────────
+        # Called after whichever LLM path finishes accumulating full_response.
 
-        # Inject document context into the last user turn if provided
+        async def _emit_blocks_and_persist(full_response: str) -> None:
+            blocks = self._extract_structured_blocks(full_response)
+            for block in blocks:
+                yield _sse({
+                    "type": "structured",
+                    "block_type": block["block_type"],
+                    "data": block["data"],
+                })
+                if block["block_type"] in ("team_recommendation", "launch_ready"):
+                    template_id = str(block["data"].get("template_id", ""))
+                    launch_config = (
+                        block["data"].get("config")
+                        if block["block_type"] == "launch_ready"
+                        else None
+                    )
+                    if template_id:
+                        self._save_recommendation(session_id, template_id, launch_config)
+            messages.append({"role": "assistant", "content": full_response})
+            self._save_messages(session_id, messages)
+
+        # `_emit_blocks_and_persist` is defined as a local async generator so
+        # we can yield from it in both LLM branches below.
+
+        # Inject document context into the final user turn (shared by both paths)
         last_content = user_message
         if documents:
             doc_lines = "\n".join(
@@ -396,6 +456,38 @@ class TinkerArchitect:
                 for d in documents
             )
             last_content = f"{user_message}\n\n{doc_lines}"
+
+        # ── Gemini path ────────────────────────────────────────────────
+        if self._gemini_model is not None and self._client is None:
+            # Convert prior turns to Gemini's history format.
+            # Gemini uses "model" for assistant turns, not "assistant".
+            gemini_history: list[dict[str, Any]] = []
+            for m in messages[:-1]:
+                role = "user" if m.get("role") == "user" else "model"
+                gemini_history.append({"role": role, "parts": [str(m.get("content", ""))]})
+
+            full_response = ""
+            try:
+                chat_session = self._gemini_model.start_chat(history=gemini_history)
+                response = await chat_session.send_message_async(
+                    last_content, stream=True
+                )
+                async for chunk in response:
+                    text_chunk = getattr(chunk, "text", "") or ""
+                    if text_chunk:
+                        full_response += text_chunk
+                        yield _sse({"type": "text_delta", "content": text_chunk})
+            except Exception as exc:
+                yield _sse({"type": "error", "content": str(exc)})
+                return
+
+            async for event in _emit_blocks_and_persist(full_response):
+                yield event
+            yield _sse({"type": "done"})
+            return
+
+        # ── Claude / Anthropic path ────────────────────────────────────
+        system_prompt = self._build_system_prompt()
 
         # Build Claude message list (all prior turns + latest user message)
         claude_messages: list[dict[str, str]] = []
@@ -422,27 +514,6 @@ class TinkerArchitect:
             yield _sse({"type": "error", "content": str(exc)})
             return
 
-        # After streaming completes: extract structured blocks and emit them
-        blocks = self._extract_structured_blocks(full_response)
-        for block in blocks:
-            yield _sse({
-                "type": "structured",
-                "block_type": block["block_type"],
-                "data": block["data"],
-            })
-            # Persist recommendation so the launch endpoint can read it
-            if block["block_type"] in ("team_recommendation", "launch_ready"):
-                template_id = str(block["data"].get("template_id", ""))
-                launch_config = (
-                    block["data"].get("config")
-                    if block["block_type"] == "launch_ready"
-                    else None
-                )
-                if template_id:
-                    self._save_recommendation(session_id, template_id, launch_config)
-
-        # Persist full assistant message to session history
-        messages.append({"role": "assistant", "content": full_response})
-        self._save_messages(session_id, messages)
-
+        async for event in _emit_blocks_and_persist(full_response):
+            yield event
         yield _sse({"type": "done"})
