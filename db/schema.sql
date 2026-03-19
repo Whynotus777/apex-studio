@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     template_id TEXT NOT NULL,
     name TEXT NOT NULL,
     status TEXT DEFAULT 'active',
+    autonomy_policy TEXT DEFAULT 'hands_on',
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_workspaces_template ON workspaces(template_id);
@@ -196,3 +197,15 @@ CREATE TABLE IF NOT EXISTS integrations (
     UNIQUE(provider, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_integrations_provider ON integrations(provider, user_id);
+-- Wave 1: Explicit task queue (one active pipeline per workspace)
+CREATE TABLE IF NOT EXISTS task_queue (
+    id             TEXT PRIMARY KEY,
+    workspace_id   TEXT NOT NULL,
+    task_id        TEXT NOT NULL,
+    queue_position INTEGER NOT NULL,
+    queue_state    TEXT NOT NULL DEFAULT 'queued',  -- queued/active/completed/cancelled
+    enqueued_at    TEXT NOT NULL,
+    started_at     TEXT,
+    completed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_queue_workspace ON task_queue(workspace_id, queue_state);

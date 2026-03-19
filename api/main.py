@@ -17,8 +17,11 @@ from pydantic import BaseModel, Field
 from api.integrations.slack import router as slack_integration_router
 from api.integrations.linkedin import router as linkedin_integration_router
 from kernel.api import ApexKernel
+from kernel.autonomy_policy import save_workspace_autonomy
 from kernel.evidence import EvidenceStore
 from kernel.learning import AgentLearning
+from kernel.scheduler import SchedulerService, next_cron_run
+from kernel.task_queue import TaskQueue
 
 try:
     from kernel.display_names import DisplayNameResolver
@@ -51,6 +54,7 @@ class WalApexKernel(ApexKernel):
             "permissions": ["workspace_id TEXT"],
             "budgets": ["workspace_id TEXT"],
             "tool_grants": ["workspace_id TEXT"],
+            "workspaces": ["autonomy_policy TEXT DEFAULT 'hands_on'"],
         }
         conn = sqlite3.connect(self.db_path)
         try:
@@ -63,6 +67,29 @@ class WalApexKernel(ApexKernel):
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
                     except sqlite3.OperationalError:
                         pass
+            # Scheduler tables (idempotent)
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS team_schedules (
+                    workspace_id     TEXT PRIMARY KEY,
+                    schedule_type    TEXT NOT NULL DEFAULT 'custom',
+                    cron_expression  TEXT NOT NULL,
+                    next_run_at      TEXT,
+                    last_run_at      TEXT,
+                    enabled          INTEGER NOT NULL DEFAULT 1,
+                    default_mission  TEXT,
+                    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE IF NOT EXISTS scheduler_runs (
+                    id             TEXT PRIMARY KEY,
+                    workspace_id   TEXT NOT NULL,
+                    scheduled_for  TEXT NOT NULL,
+                    task_id        TEXT,
+                    fired_at       TEXT NOT NULL,
+                    UNIQUE(workspace_id, scheduled_for)
+                );
+                CREATE INDEX IF NOT EXISTS idx_scheduler_runs_ws
+                    ON scheduler_runs(workspace_id, scheduled_for);
+            """)
             conn.commit()
         finally:
             conn.close()
@@ -88,6 +115,13 @@ class TeamTaskCreateRequest(BaseModel):
     priority: int = 2
 
 
+class TeamScheduleSetRequest(BaseModel):
+    schedule_type: str = "custom"
+    cron_expression: str
+    default_mission: str
+    enabled: bool = True
+
+
 class ApprovalApproveRequest(BaseModel):
     edited_content: str | None = None
 
@@ -105,6 +139,8 @@ APEX_HOME = Path(__file__).resolve().parents[1]
 kernel = WalApexKernel(APEX_HOME)
 evidence_store = EvidenceStore(APEX_HOME / "db" / "apex_state.db")
 learning = AgentLearning(APEX_HOME / "db" / "apex_state.db")
+_scheduler = SchedulerService(APEX_HOME / "db" / "apex_state.db")
+task_queue = TaskQueue(APEX_HOME / "db" / "apex_state.db")
 
 app = FastAPI(title="APEX API", version="0.1.0")
 app.add_middleware(
@@ -122,6 +158,8 @@ app.include_router(linkedin_integration_router)
 def _startup() -> None:
     with kernel._connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
+    _scheduler._ensure_tables()
+    _scheduler.start()
 
 
 # ── Internal helpers ─────────────────────────────────────────────────
@@ -512,11 +550,30 @@ def create_team_task(team_id: str, payload: TeamTaskCreateRequest) -> dict[str, 
     except Exception:
         pipeline_agents = [start_agent_id]
 
-    # Run the full pipeline in a background thread so the HTTP response
-    # returns immediately. The thread advances Scout → Writer → Critic
-    # sequentially, stopping when the task reaches review state.
+    # Enforce one-active-run-per-workspace. If a pipeline is already running
+    # for this team, enqueue the task and return immediately without launching.
+    if task_queue.team_has_active_run(team_id):
+        task_queue.enqueue_task(team_id, task_id)
+        return {
+            "task_id": task_id,
+            "team_id": team_id,
+            "starting_agent": start_agent_id,
+            "pipeline": pipeline_agents,
+            "status": "queued",
+        }
+
+    # No active run — mark active and launch the pipeline in a background thread.
+    task_queue.enqueue_task(team_id, task_id)
+    task_queue.mark_active(task_id)
+
+    def _run_and_complete(task_id: str, pipeline_agents: list[str]) -> None:
+        try:
+            _run_pipeline_chain(task_id, pipeline_agents)
+        finally:
+            task_queue.mark_completed(task_id)
+
     thread = threading.Thread(
-        target=_run_pipeline_chain,
+        target=_run_and_complete,
         args=(task_id, pipeline_agents),
         daemon=True,
         name=f"pipeline-{task_id[:8]}",
@@ -530,6 +587,65 @@ def create_team_task(team_id: str, payload: TeamTaskCreateRequest) -> dict[str, 
         "pipeline": pipeline_agents,
         "status": "running",
     }
+
+
+@app.get("/api/teams/{team_id}/queue")
+def get_team_queue(team_id: str) -> dict[str, Any]:
+    _workspace_or_404(team_id)
+    entries = task_queue.get_queue(team_id)
+    return {
+        "team_id": team_id,
+        "queue": entries,
+        "has_active_run": task_queue.team_has_active_run(team_id),
+    }
+
+
+# ── Team Schedules ─────────────────────────────────────────────────────
+
+
+@app.post("/api/teams/{team_id}/schedule")
+def set_team_schedule(team_id: str, payload: TeamScheduleSetRequest) -> dict[str, Any]:
+    """Create or replace the cron schedule for a team.
+
+    Rules:
+    - default_mission must be a non-empty string.
+    - cron_expression is validated by computing its next fire time.
+    - Enabled schedules with no default_mission are rejected.
+    """
+    _workspace_or_404(team_id)
+    if not payload.default_mission or not payload.default_mission.strip():
+        raise HTTPException(status_code=422, detail="default_mission must be a non-empty string.")
+    try:
+        schedule = _scheduler.upsert_schedule(
+            workspace_id=team_id,
+            schedule_type=payload.schedule_type,
+            cron_expression=payload.cron_expression,
+            default_mission=payload.default_mission,
+            enabled=payload.enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return schedule
+
+
+@app.get("/api/teams/{team_id}/schedule")
+def get_team_schedule(team_id: str) -> dict[str, Any]:
+    """Return the current schedule for a team, or 404 if none is set."""
+    _workspace_or_404(team_id)
+    schedule = _scheduler.get_schedule(team_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail=f"No schedule found for team '{team_id}'.")
+    return schedule
+
+
+@app.delete("/api/teams/{team_id}/schedule")
+def delete_team_schedule(team_id: str) -> dict[str, str]:
+    """Remove the schedule for a team."""
+    _workspace_or_404(team_id)
+    removed = _scheduler.delete_schedule(team_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"No schedule found for team '{team_id}'.")
+    return {"status": "deleted", "team_id": team_id}
 
 
 # ── Approvals ─────────────────────────────────────────────────────────
@@ -2430,6 +2546,14 @@ def launch_from_chat(session_id: str) -> dict[str, Any]:
 
     # Mark session as launched
     _architect.mark_launched(session_id, workspace_id)
+
+    # Persist the autonomy preference collected during onboarding.
+    if workspace_id:
+        autonomy = str(launch_config.get("autonomy") or "hands_on").strip()
+        try:
+            save_workspace_autonomy(kernel.db_path, workspace_id, autonomy)
+        except Exception:
+            pass  # Non-critical — launch still succeeds
 
     return {"workspace_id": workspace_id, "team_name": team_name}
 

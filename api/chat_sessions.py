@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kernel.api import ApexKernel
+from kernel.autonomy_policy import save_workspace_autonomy
 
 
 class ChatSessionManager:
@@ -124,6 +125,15 @@ class ChatSessionManager:
         workspace_id = str(launch_result["workspace_id"])
         workspace = self.kernel.get_workspace(workspace_id)
         team_name = str(workspace.get("name") or name)
+
+        # Persist autonomy preference collected during onboarding.
+        autonomy = str(
+            (config or {}).get("autonomy")
+            or session.get("meta", {}).get("autonomy")
+            or "hands_on"
+        ).strip()
+        if autonomy:
+            save_workspace_autonomy(self.db_path, workspace_id, autonomy)
 
         mission_task_id = self._create_mission_brief(
             workspace_id=workspace_id,
