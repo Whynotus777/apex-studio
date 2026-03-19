@@ -209,3 +209,69 @@ CREATE TABLE IF NOT EXISTS task_queue (
     completed_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_task_queue_workspace ON task_queue(workspace_id, queue_state);
+-- Sprint: Team Draft persistence (design-time flexibility layer)
+CREATE TABLE IF NOT EXISTS team_drafts (
+    id                      TEXT PRIMARY KEY,
+    user_id                 TEXT DEFAULT 'default',
+    source_goal             TEXT NOT NULL,
+    recommended_template_id TEXT,
+    name                    TEXT,
+    status                  TEXT NOT NULL DEFAULT 'draft',
+    autonomy                TEXT DEFAULT 'hands_on',
+    update_cadence          TEXT DEFAULT 'after_each_step',
+    channels                TEXT DEFAULT '[]',
+    metadata                TEXT DEFAULT '{}',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT
+);
+CREATE TABLE IF NOT EXISTS team_draft_agents (
+    id                TEXT PRIMARY KEY,
+    draft_id          TEXT NOT NULL,
+    role_key          TEXT,
+    display_name      TEXT NOT NULL,
+    role_description  TEXT,
+    tools             TEXT DEFAULT '[]',
+    skills            TEXT DEFAULT '[]',
+    pipeline_position INTEGER NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    source            TEXT NOT NULL DEFAULT 'template',
+    metadata          TEXT DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT,
+    FOREIGN KEY (draft_id) REFERENCES team_drafts(id)
+);
+CREATE INDEX IF NOT EXISTS idx_team_draft_agents_draft_id
+    ON team_draft_agents(draft_id);
+CREATE INDEX IF NOT EXISTS idx_team_draft_agents_position
+    ON team_draft_agents(draft_id, pipeline_position);
+-- Phase H: Tool registry (user-facing tool catalogue for builder UI)
+CREATE TABLE IF NOT EXISTS tool_registry (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL,
+    config_schema TEXT DEFAULT '{}',       -- JSON object
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+-- Runtime agent instances: one row per agent per workspace, written at launch
+CREATE TABLE IF NOT EXISTS agent_instances (
+    id                TEXT PRIMARY KEY,
+    workspace_id      TEXT NOT NULL,
+    display_name      TEXT NOT NULL,
+    role_key          TEXT,
+    role_description  TEXT,
+    tools             TEXT DEFAULT '[]',   -- JSON array
+    skills            TEXT DEFAULT '[]',   -- JSON array
+    pipeline_position INTEGER NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    source            TEXT NOT NULL DEFAULT 'template', -- template | custom
+    metadata          TEXT DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_workspace_id
+    ON agent_instances(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_instances_position
+    ON agent_instances(workspace_id, pipeline_position);

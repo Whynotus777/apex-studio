@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from api.team_draft_compiler import TeamDraftCompiler
 from api.integrations.slack import router as slack_integration_router
 from api.integrations.linkedin import router as linkedin_integration_router
 from kernel.api import ApexKernel
@@ -46,6 +47,7 @@ from kernel.pipeline import (
 )
 from kernel.scheduler import SchedulerService, next_cron_run
 from kernel.task_queue import TaskQueue
+from kernel.tool_registry import ToolRegistry
 
 try:
     from kernel.display_names import DisplayNameResolver
@@ -131,6 +133,15 @@ class TeamCreateRequest(BaseModel):
     overrides: dict[str, Any] | None = None
 
 
+class TeamDraftFromRecommendationRequest(BaseModel):
+    source_goal: str = Field(..., min_length=1)
+    template_id: str = Field(..., min_length=1)
+    name: str | None = None
+    autonomy: str = "hands_on"
+    update_cadence: str = "after_each_step"
+    channels: list[str] | None = None
+
+
 class TeamTaskCreateRequest(BaseModel):
     title: str
     description: str = ""
@@ -159,11 +170,35 @@ class ApprovalReviseRequest(BaseModel):
     feedback: str = Field(..., min_length=1)
 
 
+class TeamDraftAgentCreateRequest(BaseModel):
+    role_key: str | None = None
+    display_name: str
+    role_description: str | None = None
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    pipeline_position: int
+    enabled: bool = True
+    source: str = "custom"
+
+
+class TeamDraftAgentUpdateRequest(BaseModel):
+    display_name: str | None = None
+    role_description: str | None = None
+    tools: list[str] | None = None
+    skills: list[str] | None = None
+    enabled: bool | None = None
+
+
+class TeamDraftAgentReorderRequest(BaseModel):
+    ordered_agent_ids: list[str]
+
+
 APEX_HOME = Path(__file__).resolve().parents[1]
 kernel = WalApexKernel(APEX_HOME)
 evidence_store = EvidenceStore(APEX_HOME / "db" / "apex_state.db")
 learning = AgentLearning(APEX_HOME / "db" / "apex_state.db")
 notification_service = NotificationService(APEX_HOME / "db" / "apex_state.db", APEX_HOME)
+team_draft_compiler = TeamDraftCompiler(kernel)
 task_queue = TaskQueue(APEX_HOME / "db" / "apex_state.db")
 _scheduler = SchedulerService(
     APEX_HOME / "db" / "apex_state.db",
@@ -200,6 +235,54 @@ def _workspace_or_404(team_id: str) -> dict[str, Any]:
         return kernel.get_workspace(team_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _draft_or_404(draft_id: str) -> dict[str, Any]:
+    draft = kernel.get_team_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail=f"Draft '{draft_id}' not found.")
+    return draft
+
+
+def _draft_agent_or_404(draft_id: str, agent_id: str) -> dict[str, Any]:
+    _draft_or_404(draft_id)
+    for agent in kernel.get_team_draft_agents(draft_id):
+        if agent["id"] == agent_id:
+            return agent
+    raise HTTPException(
+        status_code=404,
+        detail=f"Draft agent '{agent_id}' not found in draft '{draft_id}'.",
+    )
+
+
+def _validate_tool_names(tools: list[str]) -> None:
+    registry = ToolRegistry(kernel.db_path)
+    registry.seed_defaults()
+    invalid_tools = sorted(
+        tool_name
+        for tool_name in {str(tool).strip() for tool in tools if str(tool).strip()}
+        if registry.get_tool(tool_name) is None
+    )
+    if invalid_tools:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown tools: {', '.join(invalid_tools)}",
+        )
+
+
+def _ensure_draft_not_ready_and_empty_after_delete(draft_id: str, deleted_agent_id: str) -> None:
+    draft = _draft_or_404(draft_id)
+    if draft.get("status") != "ready":
+        return
+    remaining_agents = [
+        agent for agent in kernel.get_team_draft_agents(draft_id)
+        if agent["id"] != deleted_agent_id
+    ]
+    if not remaining_agents:
+        raise HTTPException(
+            status_code=409,
+            detail="A ready draft cannot have an empty team.",
+        )
 
 
 def _approval_or_404(review_id: int) -> dict[str, Any]:
@@ -540,6 +623,49 @@ def _pending_approvals_by_team() -> dict[str, int]:
         """
     )
     return {row["workspace_id"]: row["cnt"] for row in rows if row.get("workspace_id")}
+
+
+# ── Team Drafts ───────────────────────────────────────────────────────
+
+
+@app.post("/api/team-drafts/from-recommendation")
+def create_team_draft_from_recommendation(
+    payload: TeamDraftFromRecommendationRequest,
+) -> dict[str, Any]:
+    try:
+        return team_draft_compiler.build_draft_from_template(
+            user_id="default",
+            source_goal=payload.source_goal,
+            template_id=payload.template_id,
+            recommended_name=payload.name,
+            autonomy=payload.autonomy,
+            update_cadence=payload.update_cadence,
+            channels=payload.channels,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/team-drafts/{draft_id}")
+def get_team_draft(draft_id: str) -> dict[str, Any]:
+    draft = team_draft_compiler.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail=f"Draft '{draft_id}' not found.")
+    return draft
+
+
+@app.post("/api/team-drafts/{draft_id}/launch")
+def launch_team_draft(draft_id: str) -> dict[str, Any]:
+    try:
+        return team_draft_compiler.launch_draft(draft_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 # ── Teams ─────────────────────────────────────────────────────────────
@@ -2567,6 +2693,92 @@ def list_team_documents(team_id: str) -> list[dict[str, Any]]:
     """
     _workspace_or_404(team_id)
     return kernel.get_workspace_documents(team_id)
+
+
+# ── Team Drafts ───────────────────────────────────────────────────────
+
+
+@app.get("/api/team-drafts/{draft_id}/agents")
+def get_team_draft_agents(draft_id: str) -> list[dict[str, Any]]:
+    _draft_or_404(draft_id)
+    return kernel.get_team_draft_agents(draft_id)
+
+
+@app.post("/api/team-drafts/{draft_id}/agents")
+def create_team_draft_agent(
+    draft_id: str, payload: TeamDraftAgentCreateRequest
+) -> dict[str, Any]:
+    _draft_or_404(draft_id)
+    _validate_tool_names(payload.tools)
+    try:
+        return kernel.add_team_draft_agent(
+            draft_id=draft_id,
+            role_key=payload.role_key,
+            display_name=payload.display_name,
+            role_description=payload.role_description,
+            tools=payload.tools,
+            skills=payload.skills,
+            pipeline_position=payload.pipeline_position,
+            enabled=payload.enabled,
+            source=payload.source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/team-drafts/{draft_id}/agents/{agent_id}")
+def update_team_draft_agent(
+    draft_id: str, agent_id: str, payload: TeamDraftAgentUpdateRequest
+) -> dict[str, Any]:
+    _draft_agent_or_404(draft_id, agent_id)
+    updates = payload.dict(exclude_unset=True)
+    if "tools" in updates and updates["tools"] is not None:
+        _validate_tool_names(updates["tools"])
+    try:
+        return kernel.update_team_draft_agent(agent_id, updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/team-drafts/{draft_id}/agents/{agent_id}")
+def delete_team_draft_agent(draft_id: str, agent_id: str) -> dict[str, str]:
+    _draft_agent_or_404(draft_id, agent_id)
+    _ensure_draft_not_ready_and_empty_after_delete(draft_id, agent_id)
+    kernel.delete_team_draft_agent(agent_id)
+    return {"status": "deleted", "draft_id": draft_id, "agent_id": agent_id}
+
+
+@app.post("/api/team-drafts/{draft_id}/agents/reorder")
+def reorder_team_draft_agents(
+    draft_id: str, payload: TeamDraftAgentReorderRequest
+) -> list[dict[str, Any]]:
+    _draft_or_404(draft_id)
+    draft_agents = kernel.get_team_draft_agents(draft_id)
+    existing_ids = {agent["id"] for agent in draft_agents}
+    requested_ids = payload.ordered_agent_ids
+
+    unknown_ids = sorted(set(requested_ids) - existing_ids)
+    if unknown_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown draft agent ids: {', '.join(unknown_ids)}",
+        )
+
+    duplicate_ids = sorted({agent_id for agent_id in requested_ids if requested_ids.count(agent_id) > 1})
+    if duplicate_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Duplicate draft agent ids: {', '.join(duplicate_ids)}",
+        )
+
+    return kernel.reorder_team_draft_agents(draft_id, requested_ids)
+
+
+@app.get("/api/tools")
+def list_tools() -> list[dict[str, Any]]:
+    registry = ToolRegistry(kernel.db_path)
+    registry.seed_defaults()
+    return kernel.list_registered_tools(enabled_only=True)
 
 
 # ── Chat / Architect conversation endpoints ───────────────────────────

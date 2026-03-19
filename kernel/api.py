@@ -1741,3 +1741,163 @@ class ApexKernel:
     ) -> None:
         """Re-link all documents from a chat session to a workspace after launch."""
         self._doc_store().link_to_workspace(chat_session_id, workspace_id)
+
+    # ── Team Draft pass-throughs ──────────────────────────────────────────────
+
+    def _draft_store(self):
+        try:
+            from kernel.team_drafts import TeamDraftStore
+        except ImportError:
+            from team_drafts import TeamDraftStore
+        return TeamDraftStore(self.db_path)
+
+    def create_team_draft(
+        self,
+        source_goal: str,
+        recommended_template_id: str | None = None,
+        name: str | None = None,
+        user_id: str = "default",
+        autonomy: str = "hands_on",
+        update_cadence: str = "after_each_step",
+        channels: list | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        return self._draft_store().create_draft(
+            user_id=user_id,
+            source_goal=source_goal,
+            recommended_template_id=recommended_template_id,
+            name=name,
+            autonomy=autonomy,
+            update_cadence=update_cadence,
+            channels=channels,
+            metadata=metadata,
+        )
+
+    def get_team_draft(self, draft_id: str) -> dict | None:
+        return self._draft_store().get_draft(draft_id)
+
+    def list_team_drafts(self, user_id: str = "default", status: str | None = None) -> list[dict]:
+        return self._draft_store().list_drafts(user_id=user_id, status=status)
+
+    def update_team_draft(self, draft_id: str, updates: dict) -> dict:
+        return self._draft_store().update_draft(draft_id, updates)
+
+    def delete_team_draft(self, draft_id: str) -> None:
+        self._draft_store().delete_draft(draft_id)
+
+    def add_team_draft_agent(
+        self,
+        draft_id: str,
+        role_key: str | None,
+        display_name: str,
+        role_description: str | None,
+        tools: list,
+        skills: list,
+        pipeline_position: int,
+        source: str = "template",
+        enabled: bool = True,
+        metadata: dict | None = None,
+    ) -> dict:
+        return self._draft_store().add_draft_agent(
+            draft_id=draft_id,
+            role_key=role_key,
+            display_name=display_name,
+            role_description=role_description,
+            tools=tools,
+            skills=skills,
+            pipeline_position=pipeline_position,
+            source=source,
+            enabled=enabled,
+            metadata=metadata,
+        )
+
+    def get_team_draft_agents(self, draft_id: str) -> list[dict]:
+        return self._draft_store().get_draft_agents(draft_id)
+
+    def update_team_draft_agent(self, agent_id: str, updates: dict) -> dict:
+        return self._draft_store().update_draft_agent(agent_id, updates)
+
+    def delete_team_draft_agent(self, agent_id: str) -> None:
+        self._draft_store().delete_draft_agent(agent_id)
+
+    def reorder_team_draft_agents(self, draft_id: str, ordered_agent_ids: list[str]) -> list[dict]:
+        return self._draft_store().reorder_draft_agents(draft_id, ordered_agent_ids)
+
+    # ── Tool Registry pass-throughs ───────────────────────────────────────────
+
+    def _tool_registry(self):
+        try:
+            from kernel.tool_registry import ToolRegistry
+        except ImportError:
+            from tool_registry import ToolRegistry  # type: ignore[no-redef]
+        return ToolRegistry(self.db_path)
+
+    def list_registered_tools(self, enabled_only: bool = True) -> list[dict]:
+        """Return all tools from the tool registry, optionally filtered to enabled."""
+        return self._tool_registry().list_tools(enabled_only=enabled_only)
+
+    def get_registered_tool(self, name: str) -> dict | None:
+        """Return a single tool by name, or None if not found."""
+        return self._tool_registry().get_tool(name)
+
+    def register_tool(
+        self,
+        name: str,
+        description: str,
+        category: str,
+        config_schema: dict | None = None,
+        enabled: bool = True,
+    ) -> dict:
+        """Register a new tool in the catalogue. Raises ValueError if name exists."""
+        return self._tool_registry().register_tool(
+            name=name,
+            description=description,
+            category=category,
+            config_schema=config_schema,
+            enabled=enabled,
+        )
+
+    # ── Agent instances ───────────────────────────────────────────────────
+
+    def _instance_store(self):
+        try:
+            from kernel.agent_instances import AgentInstanceStore
+        except ImportError:
+            from agent_instances import AgentInstanceStore
+        return AgentInstanceStore(self.db_path)
+
+    def create_agent_instance(
+        self,
+        workspace_id: str,
+        display_name: str,
+        role_key: str | None = None,
+        role_description: str | None = None,
+        tools: list | None = None,
+        skills: list | None = None,
+        pipeline_position: int = 0,
+        source: str = "template",
+        enabled: bool = True,
+        metadata: dict | None = None,
+    ) -> dict:
+        return self._instance_store().create_agent_instance(
+            workspace_id=workspace_id,
+            display_name=display_name,
+            role_key=role_key,
+            role_description=role_description,
+            tools=tools or [],
+            skills=skills or [],
+            pipeline_position=pipeline_position,
+            source=source,
+            enabled=enabled,
+            metadata=metadata,
+        )
+
+    def bulk_create_agent_instances_from_draft(
+        self,
+        workspace_id: str,
+        draft_agents: list[dict],
+    ) -> list[dict]:
+        return self._instance_store().bulk_create_from_draft(workspace_id, draft_agents)
+
+    def get_workspace_agent_instances(self, workspace_id: str) -> list[dict]:
+        return self._instance_store().get_workspace_agents(workspace_id)
