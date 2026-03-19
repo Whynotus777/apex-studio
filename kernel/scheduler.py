@@ -169,12 +169,16 @@ class SchedulerService:
 
     def start(self) -> None:
         if os.environ.get("ENABLE_SCHEDULER", "").lower() != "true":
-            log.info("Scheduler disabled (ENABLE_SCHEDULER != true). Skipping start.")
+            msg = "SchedulerService disabled (ENABLE_SCHEDULER != 'true'). Skipping start."
+            log.info(msg)
+            print(f"[apex] {msg}", flush=True)
             return
         self._ensure_tables()
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="apex-scheduler")
         self._thread.start()
-        log.info("SchedulerService started (tick=%ds).", self.TICK_SECONDS)
+        msg = f"SchedulerService started (tick={self.TICK_SECONDS}s)."
+        log.info(msg)
+        print(f"[apex] {msg}", flush=True)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -246,6 +250,28 @@ class SchedulerService:
             ).fetchone()
             if existing:
                 log.debug("Slot %s already fired for workspace %s — skipping.", slot_str, workspace_id)
+                return
+
+            # Skip if the team still has pending or in-flight work.
+            # next_run_at is NOT advanced so the scheduler retries on the next tick.
+            busy_row = conn.execute(
+                """
+                SELECT id FROM tasks
+                WHERE workspace_id = ?
+                  AND status IN ('active', 'queued', 'in_progress', 'needs_review')
+                LIMIT 1
+                """,
+                (workspace_id,),
+            ).fetchone()
+            if busy_row:
+                log.info(
+                    "Skipping scheduled run for %s: team has active/pending work (task %s).",
+                    workspace_id, busy_row["id"],
+                )
+                print(
+                    f"[apex] Scheduler: skipping {workspace_id} — team busy (task {busy_row['id']})",
+                    flush=True,
+                )
                 return
 
             # Create the task record.

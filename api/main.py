@@ -3,10 +3,26 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
+
+# Load .env before any kernel objects are constructed so ENABLE_SCHEDULER
+# and other vars are in os.environ when SchedulerService.__init__ runs.
+# dotenv's override=False means real env vars (set by the shell or CI) win.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except ImportError:  # python-dotenv not installed — fall back to manual parse
+    _env_file = Path(__file__).resolve().parents[1] / ".env"
+    if _env_file.exists():
+        for _line in _env_file.read_text().splitlines():
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                os.environ.setdefault(_k.strip(), _v.strip())
 
 _pipeline_log = logging.getLogger("apex.pipeline")
 
@@ -172,6 +188,7 @@ def _startup() -> None:
     with kernel._connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
     _scheduler._ensure_tables()
+    print(f"[apex] ENABLE_SCHEDULER={os.environ.get('ENABLE_SCHEDULER')!r}", flush=True)
     _scheduler.start()
 
 

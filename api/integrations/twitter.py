@@ -303,6 +303,8 @@ class TwitterIntegration:
             ("pkce_state",    "TEXT"),
             ("scope",         "TEXT"),
             ("token_type",    "TEXT"),
+            ("refresh_token", "TEXT"),
+            ("expires_at",    "TEXT"),
         ]
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
