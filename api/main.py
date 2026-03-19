@@ -17,9 +17,17 @@ from pydantic import BaseModel, Field
 from api.integrations.slack import router as slack_integration_router
 from api.integrations.linkedin import router as linkedin_integration_router
 from kernel.api import ApexKernel
-from kernel.autonomy_policy import save_workspace_autonomy
+from kernel.autonomy_policy import decide, get_workspace_autonomy, save_workspace_autonomy
 from kernel.evidence import EvidenceStore
 from kernel.learning import AgentLearning
+from kernel.notifications import NotificationService
+from kernel.pipeline import (
+    advance_queue as _pipeline_advance_queue,
+    get_ordered_pipeline_agents as _pipeline_get_ordered_agents,
+    launch_pipeline as _pipeline_launch,
+    resolve_start_agent as _pipeline_resolve_start,
+    run_pipeline_chain as _pipeline_run_chain,
+)
 from kernel.scheduler import SchedulerService, next_cron_run
 from kernel.task_queue import TaskQueue
 
@@ -139,8 +147,13 @@ APEX_HOME = Path(__file__).resolve().parents[1]
 kernel = WalApexKernel(APEX_HOME)
 evidence_store = EvidenceStore(APEX_HOME / "db" / "apex_state.db")
 learning = AgentLearning(APEX_HOME / "db" / "apex_state.db")
-_scheduler = SchedulerService(APEX_HOME / "db" / "apex_state.db")
+notification_service = NotificationService(APEX_HOME / "db" / "apex_state.db", APEX_HOME)
 task_queue = TaskQueue(APEX_HOME / "db" / "apex_state.db")
+_scheduler = SchedulerService(
+    APEX_HOME / "db" / "apex_state.db",
+    kernel=kernel,
+    task_queue=task_queue,
+)
 
 app = FastAPI(title="APEX API", version="0.1.0")
 app.add_middleware(
@@ -219,79 +232,240 @@ def _first_active_goal_id() -> str | None:
 
 
 def _resolve_start_agent(team_id: str, workspace: dict[str, Any], pipeline_stage: str | None = None) -> str:
-    manifest = kernel.get_template(workspace["template_id"])
-    if pipeline_stage:
-        first_stage = pipeline_stage.lower().strip()
-    else:
-        pipeline = manifest.get("pipeline", [])
-        if not pipeline:
-            raise HTTPException(status_code=400, detail="Template has no pipeline stages.")
-        first_stage = str(pipeline[0]).lower()
-    stage_map = {
-        "discover": "scout",
-        "analyze": "analyst",
-        "analyse": "analyst",
-        "strategize": "strategist",
-        "create": "writer",
-        "draft": "writer",
-        "review": "critic",
-        "validate": "critic",
-        "publish": "publisher",
-        "build": "builder",
-        "launch": "apex",
-        "grow": "apex",
-        "enrich": "analyst",
-    }
-    role = stage_map.get(first_stage)
-    if not role:
-        raise HTTPException(status_code=400, detail=f"Unsupported pipeline stage '{first_stage}'.")
-    agent_id = f"{team_id}-{role}"
-    kernel._ensure_agent_exists(agent_id)
-    return agent_id
+    """HTTP-context wrapper: raises HTTPException instead of ValueError."""
+    try:
+        return _pipeline_resolve_start(team_id, workspace, kernel, pipeline_stage)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _get_ordered_pipeline_agents(team_id: str, workspace: dict[str, Any]) -> list[str]:
-    """Return workspace-namespaced agent IDs in template pipeline order."""
-    manifest = kernel.get_template(workspace["template_id"])
-    return [
-        f"{team_id}-{agent['name']}"
-        for agent in manifest.get("agents", [])
-        if agent.get("name")
-    ]
+    return _pipeline_get_ordered_agents(team_id, workspace, kernel)
 
 
 def _run_pipeline_chain(task_id: str, agent_ids: list[str]) -> None:
-    """
-    Spawn agents sequentially in a background thread.
-    Stops early if the task is cancelled, failed, or enters review state.
-    Each kernel.spawn_agent() call blocks until that agent finishes.
-    """
-    for agent_id in agent_ids:
+    _pipeline_run_chain(task_id, agent_ids, kernel)
+    _maybe_notify_task_decision(task_id)
+
+
+def _task_or_none(task_id: str) -> dict[str, Any] | None:
+    rows = kernel._fetch_all(
+        """
+        SELECT id, workspace_id, title, status, review_status
+        FROM tasks
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (task_id,),
+    )
+    return rows[0] if rows else None
+
+
+def _latest_review_outcome(task_id: str) -> tuple[str, float] | None:
+    rows = kernel._fetch_all(
+        """
+        SELECT verdict, feedback
+        FROM reviews
+        WHERE task_id = ? AND verdict IS NOT NULL AND reviewed_at IS NOT NULL
+        ORDER BY reviewed_at DESC, id DESC
+        LIMIT 1
+        """,
+        (task_id,),
+    )
+    if not rows:
+        return None
+
+    row = rows[0]
+    verdict = str(row.get("verdict") or "").strip().upper()
+    if not verdict:
+        return None
+
+    overall_score: float | None = None
+    raw_feedback = row.get("feedback")
+    if raw_feedback:
         try:
-            with kernel._connect() as conn:
-                row = conn.execute(
-                    "SELECT status FROM tasks WHERE id = ?", (task_id,)
-                ).fetchone()
-            if not row:
-                _pipeline_log.warning("Pipeline chain: task %s not found, stopping", task_id)
-                break
-            status = row["status"]
-            if status in ("cancelled", "failed"):
-                _pipeline_log.info("Pipeline chain: task %s is %s, stopping", task_id, status)
-                break
-            if status in ("review", "needs_review", "pending_approval"):
-                _pipeline_log.info("Pipeline chain: task %s already in review, stopping", task_id)
-                break
+            parsed = json.loads(raw_feedback)
+            if isinstance(parsed, dict) and parsed.get("overall_score") is not None:
+                overall_score = float(parsed["overall_score"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            overall_score = None
 
-            _pipeline_log.info("Pipeline chain: spawning %s for task %s", agent_id, task_id)
-            kernel.spawn_agent(agent_id, task_id)
-            _pipeline_log.info("Pipeline chain: %s finished for task %s", agent_id, task_id)
+    if overall_score is None:
+        eval_rows = kernel._fetch_all(
+            """
+            SELECT score
+            FROM evals
+            WHERE task_id = ? AND eval_layer = 'critic'
+              AND eval_type IN ('dimension_score', 'rubric')
+              AND dimension = 'overall'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        )
+        if eval_rows:
+            try:
+                overall_score = float(eval_rows[0]["score"])
+            except (TypeError, ValueError):
+                overall_score = 0.0
 
-        except Exception as exc:
-            _pipeline_log.error(
-                "Pipeline chain: %s failed for task %s: %s", agent_id, task_id, exc
+    return verdict, overall_score if overall_score is not None else 0.0
+
+
+def _task_decision(task: dict[str, Any]) -> str | None:
+    status = str(task.get("status") or "").strip().lower()
+    review_status = str(task.get("review_status") or "").strip().lower()
+    if status == "blocked" or review_status == "blocked":
+        return "blocked"
+
+    workspace_id = str(task.get("workspace_id") or "").strip()
+    if not workspace_id:
+        return None
+
+    review_outcome = _latest_review_outcome(str(task["id"]))
+    if not review_outcome:
+        return None
+
+    verdict, overall_score = review_outcome
+    autonomy_policy = get_workspace_autonomy(kernel.db_path, workspace_id)
+    return decide(autonomy_policy, verdict, overall_score)
+
+
+def _set_task_approved(task_id: str) -> None:
+    with kernel._connect() as conn:
+        conn.execute(
+            """UPDATE tasks
+               SET status = 'approved', review_status = 'approved',
+                   completed_at = datetime('now'), checked_out_by = NULL
+               WHERE id = ?""",
+            (task_id,),
+        )
+        conn.commit()
+
+
+def _set_task_blocked(task_id: str) -> None:
+    with kernel._connect() as conn:
+        conn.execute(
+            "UPDATE tasks SET status = 'blocked', review_status = 'blocked' WHERE id = ?",
+            (task_id,),
+        )
+        conn.commit()
+
+
+def _get_writer_session_text(task_id: str) -> str:
+    """Return the proposed_output from the most recent non-critic agent session."""
+    rows = kernel._fetch_all(
+        """
+        SELECT context, agent_name FROM agent_sessions
+        WHERE task_id = ?
+          AND agent_name NOT LIKE '%-critic'
+          AND agent_name != 'critic'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (task_id,),
+    )
+    if not rows:
+        return ""
+    return _extract_output_text(rows[0])
+
+
+def _publish_to_social_channels(workspace_id: str, task_id: str) -> None:
+    """Attempt to publish the writer's output to any connected social channels.
+
+    Errors are caught and logged; a failed publish never blocks status updates
+    or notifications.
+    """
+    text = _get_writer_session_text(task_id)
+    if not text.strip():
+        _pipeline_log.warning(
+            "Auto-publish: no writer output found for task %s; skipping.", task_id
+        )
+        return
+
+    # LinkedIn
+    try:
+        from api.integrations.linkedin import LinkedInPostRequest, linkedin_post  # noqa: PLC0415
+        linkedin_post(LinkedInPostRequest(text=text, task_id=task_id))
+        _pipeline_log.info("Auto-publish: posted to LinkedIn for task %s.", task_id)
+    except HTTPException as exc:
+        _pipeline_log.info(
+            "Auto-publish: LinkedIn not connected for task %s (%s); skipping.",
+            task_id,
+            exc.detail,
+        )
+    except Exception as exc:
+        _pipeline_log.error(
+            "Auto-publish: LinkedIn publish failed for task %s: %s", task_id, exc
+        )
+
+    # X / Twitter
+    try:
+        from api.integrations.twitter import TwitterIntegration  # noqa: PLC0415
+        tw = TwitterIntegration(APEX_HOME / "db" / "apex_state.db")
+        tw.post_tweet(workspace_id, text)
+        _pipeline_log.info("Auto-publish: posted to X/Twitter for task %s.", task_id)
+    except Exception as exc:
+        _pipeline_log.info(
+            "Auto-publish: X/Twitter publish skipped or failed for task %s: %s",
+            task_id,
+            exc,
+        )
+
+
+def _maybe_notify_task_decision(task_id: str) -> None:
+    """Apply the workspace autonomy policy after the pipeline chain completes.
+
+    Steps:
+    1. Read the latest scored Critic review (verdict + overall_score).
+    2. Call autonomy_policy.decide() with the workspace's stored policy.
+    3. Based on the decision:
+       - needs_review       → notify for human approval (current behaviour)
+       - approved           → set status='approved', notify auto-published
+       - approved_and_publish → set status='approved', publish to social channels, notify
+       - blocked            → set status='blocked', notify error
+    """
+    task = _task_or_none(task_id)
+    if not task:
+        return
+
+    workspace_id = str(task.get("workspace_id") or "").strip()
+    if not workspace_id:
+        return
+    task_title = str(task.get("title") or task_id).strip() or task_id
+
+    decision = _task_decision(task)
+    if not decision:
+        return
+
+    _pipeline_log.info(
+        "Autonomy policy: task %s workspace %s → decision=%s", task_id, workspace_id, decision
+    )
+
+    try:
+        if decision == "needs_review":
+            notification_service.notify_review_ready(workspace_id, task_id, task_title)
+
+        elif decision == "approved":
+            _set_task_approved(task_id)
+            notification_service.notify_auto_published(workspace_id, task_id, task_title)
+
+        elif decision == "approved_and_publish":
+            _set_task_approved(task_id)
+            _publish_to_social_channels(workspace_id, task_id)
+            notification_service.notify_auto_published(workspace_id, task_id, task_title)
+
+        elif decision == "blocked":
+            _set_task_blocked(task_id)
+            notification_service.notify_error(
+                workspace_id,
+                task_id,
+                f"{task_title} was blocked by the pipeline.",
             )
-            break
+    except Exception:
+        _pipeline_log.exception(
+            "Autonomy policy actions failed for task %s (decision=%s)", task_id, decision
+        )
 
 
 def _store_learning_diff(workspace_id: str, task_id: str, original: str, edited: str) -> None:
@@ -550,42 +724,16 @@ def create_team_task(team_id: str, payload: TeamTaskCreateRequest) -> dict[str, 
     except Exception:
         pipeline_agents = [start_agent_id]
 
-    # Enforce one-active-run-per-workspace. If a pipeline is already running
-    # for this team, enqueue the task and return immediately without launching.
-    if task_queue.team_has_active_run(team_id):
-        task_queue.enqueue_task(team_id, task_id)
-        return {
-            "task_id": task_id,
-            "team_id": team_id,
-            "starting_agent": start_agent_id,
-            "pipeline": pipeline_agents,
-            "status": "queued",
-        }
-
-    # No active run — mark active and launch the pipeline in a background thread.
-    task_queue.enqueue_task(team_id, task_id)
-    task_queue.mark_active(task_id)
-
-    def _run_and_complete(task_id: str, pipeline_agents: list[str]) -> None:
-        try:
-            _run_pipeline_chain(task_id, pipeline_agents)
-        finally:
-            task_queue.mark_completed(task_id)
-
-    thread = threading.Thread(
-        target=_run_and_complete,
-        args=(task_id, pipeline_agents),
-        daemon=True,
-        name=f"pipeline-{task_id[:8]}",
+    result = _pipeline_launch(
+        team_id, task_id, pipeline_agents, kernel, task_queue,
+        source="api", post_run_hook=_maybe_notify_task_decision,
     )
-    thread.start()
-
     return {
         "task_id": task_id,
         "team_id": team_id,
         "starting_agent": start_agent_id,
-        "pipeline": pipeline_agents,
-        "status": "running",
+        "pipeline": result["pipeline"],
+        "status": result["status"],
     }
 
 
@@ -698,10 +846,32 @@ def approve_approval(review_id: int, payload: ApprovalApproveRequest | None = No
             import logging
             logging.warning("_store_learning_diff failed (schema mismatch): %s", exc)
     kernel.approve_action(review_id)
+    try:
+        notification_service.notify_auto_published(
+            approval.get("workspace_id") or "global",
+            approval["task_id"],
+            approval.get("title") or approval["task_id"],
+        )
+    except Exception:
+        _pipeline_log.exception(
+            "Notification dispatch failed for manual approval review_id=%s task_id=%s",
+            review_id,
+            approval["task_id"],
+        )
+
+    # After approval, complete the queue entry and start the next queued task.
+    # mark_completed is idempotent: if the pipeline already marked the entry
+    # completed when the task entered review, this is a no-op.
+    task_id = approval["task_id"]
+    workspace_id: str | None = approval.get("workspace_id")
+    if workspace_id:
+        task_queue.mark_completed(task_id)
+        _pipeline_advance_queue(workspace_id, task_id, kernel, task_queue)
+
     return {
         "status": "approved",
         "review_id": review_id,
-        "task_id": approval["task_id"],
+        "task_id": task_id,
         "edited": bool(edited_content),
     }
 

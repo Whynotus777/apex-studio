@@ -1,11 +1,14 @@
-"""APEX Scheduler — background task creation from team schedules.
+"""APEX Scheduler — cron-based pipeline triggering for teams.
 
 Activated only when ENABLE_SCHEDULER=true in the environment.
 Checks every 60 seconds. Uses per-workspace lease rows in scheduler_runs
 to guarantee at-most-once task creation per scheduled interval.
 
-Wave 2 note: pipeline chain triggering is intentionally omitted here.
-This module only creates the task record and logs the run.
+Pipeline triggering: after creating the task record the scheduler calls
+kernel/pipeline.launch_pipeline(), which enqueues the task and starts the
+pipeline chain in a background thread if the team has no active run.
+If the team is busy the task stays queued and will be picked up by the
+auto-continuation logic when the active run completes.
 """
 from __future__ import annotations
 
@@ -13,11 +16,14 @@ import logging
 import os
 import sqlite3
 import threading
-import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from kernel.api import ApexKernel
+    from kernel.task_queue import TaskQueue
 
 log = logging.getLogger("apex.scheduler")
 
@@ -131,11 +137,15 @@ def interval_floor(expr: str, at: datetime) -> datetime:
 # ---------------------------------------------------------------------------
 
 class SchedulerService:
-    """Background scheduler that creates tasks from enabled team_schedules rows.
+    """Background scheduler that creates and launches pipeline tasks from schedules.
+
+    Pass *kernel* and *task_queue* to enable full pipeline triggering.
+    Without them the service falls back to task-record-only mode (useful for
+    unit tests that don't need a live kernel).
 
     Usage::
 
-        svc = SchedulerService(db_path)
+        svc = SchedulerService(db_path, kernel=kernel, task_queue=task_queue)
         svc.start()          # no-op unless ENABLE_SCHEDULER=true
         # …application runs…
         svc.stop()
@@ -143,8 +153,15 @@ class SchedulerService:
 
     TICK_SECONDS = 60
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        kernel: "ApexKernel | None" = None,
+        task_queue: "TaskQueue | None" = None,
+    ) -> None:
         self.db_path = str(db_path)
+        self._kernel = kernel
+        self._task_queue = task_queue
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -271,6 +288,57 @@ class SchedulerService:
             log.info("Scheduler fired task %s for workspace %s (slot=%s).", task_id, workspace_id, slot_str)
         finally:
             conn.close()
+
+        # Trigger the pipeline chain if kernel + task_queue are available.
+        self._trigger_pipeline(workspace_id, task_id, mission)
+
+    def _trigger_pipeline(self, workspace_id: str, task_id: str, mission: str) -> None:
+        """Resolve pipeline agents and launch the chain for *task_id*.
+
+        Skips gracefully if kernel/task_queue are not configured or if the
+        workspace has no template with a valid pipeline.
+        """
+        if self._kernel is None or self._task_queue is None:
+            log.debug(
+                "Scheduler: no kernel/task_queue configured — task %s created but pipeline not triggered.",
+                task_id,
+            )
+            return
+
+        # Late import to avoid circular dependency at module load time.
+        from kernel.pipeline import get_ordered_pipeline_agents, launch_pipeline
+
+        try:
+            workspace = self._kernel.get_workspace(workspace_id)
+        except Exception as exc:
+            log.error("Scheduler: could not look up workspace %s: %s", workspace_id, exc)
+            return
+
+        try:
+            pipeline_agents = get_ordered_pipeline_agents(workspace_id, workspace, self._kernel)
+        except Exception as exc:
+            log.error("Scheduler: could not resolve pipeline agents for %s: %s", workspace_id, exc)
+            return
+
+        if not pipeline_agents:
+            log.warning("Scheduler: workspace %s has no pipeline agents; skipping launch.", workspace_id)
+            return
+
+        # Assign the task to the first agent so the kernel knows who owns it.
+        try:
+            self._kernel.assign_task(task_id, pipeline_agents[0])
+        except Exception as exc:
+            log.warning("Scheduler: assign_task failed for %s / %s: %s", task_id, pipeline_agents[0], exc)
+
+        result = launch_pipeline(
+            workspace_id, task_id, pipeline_agents,
+            self._kernel, self._task_queue,
+            source="scheduler",
+        )
+        log.info(
+            "Scheduler: pipeline %s for workspace %s task %s (agents=%s).",
+            result["status"], workspace_id, task_id, pipeline_agents,
+        )
 
     # ── DDL ───────────────────────────────────────────────────────────
 
